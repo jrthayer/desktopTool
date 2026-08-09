@@ -17,9 +17,16 @@ internal sealed class ReadmeModel : WidgetStyleModel
     // compounds with GDI+'s own AntiAlias (grayscale, non-ClearType - see PaintDetailPane) text
     // rendering to make a full paragraph of small body text visibly soft/blurry. A reference window
     // meant to actually be read has no reason to sit translucent the way an ambient Fence does.
+    //
+    // HeaderCloseButton on by default too, unlike every other widget on this base (off by default -
+    // see WidgetStyleModel's own doc comment) - this widget is opened, read, and dismissed in one
+    // sitting rather than left running, so it needs a close action reachable without first
+    // right-clicking or clicking the title to engage it the way a persistent Fence's own Settings
+    // menu can wait for.
     public ReadmeModel()
     {
         Opacity = 100;
+        HeaderCloseButton = true;
     }
 
     public int? X { get; set; }
@@ -37,10 +44,10 @@ internal sealed class ReadmeModel : WidgetStyleModel
 /// Built on LayeredWidgetForm like every other on-screen widget, so it drags/resizes/themes/closes
 /// the exact same way rather than being a plain modal dialog (the old ReadmeForm this replaces) - but
 /// genuinely ephemeral, unlike Fences/Layout Launcher/Widget Manager: created fresh by OpenReadme
-/// each time, fully disposed on close (its own × ExtraButton is a real Close(), not this base's usual
-/// "cancel and hide" pattern - hence no OnFormClosing override here at all), and backed by
-/// ReadmeModel above rather than a saved-to-disk Store, since there's nothing here worth remembering
-/// between opens.</summary>
+/// each time, fully disposed on close (its own header close button - see ReadmeModel's own
+/// HeaderCloseButton default - is a real Close(), not this base's usual "cancel and hide" pattern -
+/// hence no OnFormClosing override here at all), and backed by ReadmeModel above rather than a
+/// saved-to-disk Store, since there's nothing here worth remembering between opens.</summary>
 internal sealed class ReadmeWidget : LayeredWidgetForm
 {
     private const int OuterMarginPx = 13;
@@ -94,12 +101,14 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
 
     private readonly ReadmeModel _model;
     private readonly Font _detailTitleFont;
+    // One point larger than AppTheme.Font - AA softness is a roughly fixed pixel width at the glyph
+    // edge, so it reads proportionally less blurry on a full paragraph of body text at a slightly
+    // bigger size, without touching the list rows' own single-line Font.
+    private readonly Font _detailBodyFont;
 
     private bool _settingsButtonArmed;
     private int? _armedRowIndex;
     private int _selectedIndex;
-
-    protected override IReadOnlyList<ChromeButton> ExtraButtons { get; }
 
     protected override int OuterMargin => OuterMarginPx;
     protected override int TopBand => ButtonRowAtBottom ? 0 : TopMarginWithButtons;
@@ -117,11 +126,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
     {
         _model = new ReadmeModel();
         _detailTitleFont = new Font(AppTheme.Font, FontStyle.Bold);
-
-        ExtraButtons = new List<ChromeButton>
-        {
-            new("×", 22, Close),
-        };
+        _detailBodyFont = new Font(AppTheme.Font.FontFamily, AppTheme.Font.Size + 1f);
 
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -195,8 +200,12 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         var contentPoint = ToContent(windowPoint);
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
         if (ShowsButtons && (GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
-            || GetCopySettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
-            || TryGetExtraButtonAt(contentWidth, onLeft, contentPoint, out _)))
+            || GetCopySettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)))
+            return HTCLIENT;
+
+        // Not gated by ShowsButtons, unlike the check above - see IsOverHeaderCloseButton's own
+        // comment.
+        if (IsOverHeaderCloseButton(contentPoint))
             return HTCLIENT;
 
         if (ShowsButtons)
@@ -212,7 +221,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
             return resizeCode;
         }
 
-        if (!_model.HideTitle && y - TopBand <= HeaderHeight)
+        if (!_model.HideHeader && y - TopBand <= HeaderHeight)
             return HTBORDER;
 
         return HTCLIENT;
@@ -228,14 +237,14 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         var contentWidth = GetContentSize().Width;
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
 
+        if (TryArmHeaderCloseButton(contentPoint))
+            return;
         if (ShowsButtons && GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint))
         {
             _settingsButtonArmed = true;
             return;
         }
         if (ShowsButtons && TryArmCopySettingsButton(contentPoint))
-            return;
-        if (ShowsButtons && TryArmExtraButton(contentPoint))
             return;
         if (TryHandleListMouseDown(contentPoint))
             return;
@@ -266,6 +275,8 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         var contentWidth = GetContentSize().Width;
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
 
+        FireArmedHeaderCloseButton(contentPoint);
+
         if (_settingsButtonArmed)
         {
             _settingsButtonArmed = false;
@@ -275,7 +286,6 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         }
 
         FireArmedCopySettingsButton(contentPoint);
-        FireArmedExtraButton(contentPoint);
         EndListScrollDrag();
 
         if (_armedRowIndex is int armedIndex)
@@ -297,12 +307,22 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
 
     protected override int TitleRowHeight => HeaderHeight;
 
-    protected override bool HideTitle
+    protected override bool HideHeader
     {
-        get => _model.HideTitle;
+        get => _model.HideHeader;
         set
         {
-            _model.HideTitle = value;
+            _model.HideHeader = value;
+            RenderAndPresent();
+        }
+    }
+
+    protected override bool ShowHeaderCloseButton
+    {
+        get => _model.HeaderCloseButton;
+        set
+        {
+            _model.HeaderCloseButton = value;
             RenderAndPresent();
         }
     }
@@ -310,7 +330,11 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
     // Nothing to flush to disk - see this class's own comment on ReadmeModel above.
     protected override void PersistStyle() { }
 
-    protected override void DisposeOwnedResources() => _detailTitleFont.Dispose();
+    protected override void DisposeOwnedResources()
+    {
+        _detailTitleFont.Dispose();
+        _detailBodyFont.Dispose();
+    }
 
     /// <summary>The row list occupies only the left column, unlike WidgetManagerWidget/
     /// LayoutLauncherWidget's own full-width lists - GetListArea's own width is entirely up to the
@@ -318,7 +342,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
     /// for GetDetailArea/PaintDetailPane below.</summary>
     protected override Rectangle GetListArea(int contentWidth, int contentHeight)
     {
-        var top = (_model.HideTitle ? 0 : HeaderHeight) + ListVerticalPadding;
+        var top = (_model.HideHeader ? 0 : HeaderHeight) + ListVerticalPadding;
         var height = Math.Max(ListRowHeight, contentHeight - top - ListVerticalPadding);
         return new Rectangle(ListHorizontalPadding, top, ListColumnWidth, height);
     }
@@ -357,7 +381,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
             g.FillRectangle(rowFill, rowRect);
 
         var previousTextHint = g.TextRenderingHint;
-        g.TextRenderingHint = TextRenderingHint.AntiAlias;
+        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
         using (var textBrush = new SolidBrush(Color.WhiteSmoke))
         using (var textFormat = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             g.DrawString(Entries[index].Title, Font, textBrush, new Rectangle(rowRect.X + 8, rowRect.Y, rowRect.Width - 12, rowRect.Height), textFormat);
@@ -394,7 +418,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         var windowRect = ToWindow(detailArea);
 
         var previousTextHint = g.TextRenderingHint;
-        g.TextRenderingHint = TextRenderingHint.AntiAlias;
+        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
 
         var titleRect = new Rectangle(windowRect.X, windowRect.Y, windowRect.Width, DetailTitleHeight);
         using (var titleBrush = new SolidBrush(Color.WhiteSmoke))
@@ -402,7 +426,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
 
         var bodyRect = new Rectangle(windowRect.X, windowRect.Y + DetailTitleHeight, windowRect.Width, windowRect.Height - DetailTitleHeight);
         using (var bodyBrush = new SolidBrush(Color.WhiteSmoke))
-            g.DrawString(entry.Body, Font, bodyBrush, bodyRect);
+            g.DrawString(entry.Body, _detailBodyFont, bodyBrush, bodyRect);
 
         g.TextRenderingHint = previousTextHint;
     }

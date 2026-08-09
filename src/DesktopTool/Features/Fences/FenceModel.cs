@@ -59,7 +59,8 @@ internal sealed class FenceItemListConverter : JsonConverter<List<FenceItem>>
 
 /// <summary>Inherits WidgetStyleModel (TintColor/HeaderDarkness/Opacity/FullOpacityOnHover/
 /// TintStrength/Margin/CornerRadius/TitleFontSize/TitleAlignment/HeaderBorderMode/LightBorder/
-/// HideTitle) purely so StyleMenuRows/StyleTint's shared helpers can operate against a Fence the
+/// HideHeader/HeaderCloseButton) purely so StyleMenuRows/StyleTint's shared helpers can operate
+/// against a Fence the
 /// same way they do LayoutLauncherModel/WidgetManagerModel - zero effect on JSON serialization
 /// (System.Text.Json serializes every inherited public property the same as a directly-declared
 /// one) and zero behavior change for FenceForm, which still reads/writes these properties directly,

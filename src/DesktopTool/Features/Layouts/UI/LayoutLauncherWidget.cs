@@ -68,6 +68,15 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
     /// button to jump straight to the profile it just captured.</summary>
     public event EventHandler<Guid?>? ManageLayoutsRequested;
 
+    /// <summary>Fired whenever ShowAndPersist/HideAndPersist actually change Visible - lets
+    /// WidgetManagerWidget repaint its own Layout Launcher row immediately, regardless of which of
+    /// this widget's several show/hide paths triggered it (its own tray-menu-turned-Widget-Manager-row
+    /// toggle, its Settings-band Close button, or the always-visible header close button - see
+    /// ShowHeaderCloseButton). Without this, IsRowOn's own live _layoutLauncher.Visible read is
+    /// still correct, but nothing prompts Widget Manager to actually repaint and pick it up until
+    /// something else does (a hover, its own row click) - a stale switch until then.</summary>
+    public event EventHandler? VisibilityChanged;
+
     protected override int OuterMargin => OuterMarginPx;
     protected override int TopBand => ButtonRowAtBottom ? 0 : TopMarginWithButtons;
     protected override int BottomBand => ButtonRowAtBottom ? TopMarginWithButtons : OuterMargin;
@@ -149,6 +158,7 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
         Activate();
         _model.Visible = true;
         Persist();
+        VisibilityChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void HideAndPersist()
@@ -156,6 +166,7 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
         Hide();
         _model.Visible = false;
         Persist();
+        VisibilityChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Real disposal, for actual app shutdown (TrayApplicationContext.OnExit) - the only
@@ -240,6 +251,11 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
             || TryGetExtraButtonAt(contentWidth, onLeft, contentPoint, out _)))
             return HTCLIENT;
 
+        // Not gated by ShowsButtons, unlike every check above - see IsOverHeaderCloseButton's own
+        // comment.
+        if (IsOverHeaderCloseButton(contentPoint))
+            return HTCLIENT;
+
         // Manage Layouts... lives inside the body itself (see GetContentButtons) - already inside the
         // ordinary HTCLIENT territory below, so no extra carve-out is needed here, unlike the margin-
         // band Settings/extra buttons above.
@@ -262,7 +278,7 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
         // HTBORDER, not HTCAPTION - a left-button drag from the title row itself doesn't move the
         // widget (only the margin does, once active - see above); right-click/double-click/hover
         // still work (see HTBORDER's own comment on LayeredWidgetForm).
-        if (!_model.HideTitle && y - TopBand <= HeaderHeight)
+        if (!_model.HideHeader && y - TopBand <= HeaderHeight)
             return HTBORDER;
 
         return HTCLIENT;
@@ -278,6 +294,8 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
         var contentWidth = GetContentSize().Width;
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
 
+        if (TryArmHeaderCloseButton(contentPoint))
+            return;
         if (ShowsButtons && GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint))
         {
             _settingsButtonArmed = true;
@@ -333,6 +351,8 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
         var contentWidth = GetContentSize().Width;
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
 
+        FireArmedHeaderCloseButton(contentPoint);
+
         if (_settingsButtonArmed)
         {
             _settingsButtonArmed = false;
@@ -371,12 +391,23 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
 
     protected override int TitleRowHeight => HeaderHeight;
 
-    protected override bool HideTitle
+    protected override bool HideHeader
     {
-        get => _model.HideTitle;
+        get => _model.HideHeader;
         set
         {
-            _model.HideTitle = value;
+            _model.HideHeader = value;
+            Persist();
+            RenderAndPresent();
+        }
+    }
+
+    protected override bool ShowHeaderCloseButton
+    {
+        get => _model.HeaderCloseButton;
+        set
+        {
+            _model.HeaderCloseButton = value;
             Persist();
             RenderAndPresent();
         }
@@ -553,7 +584,7 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
     /// own top/bottom padding, and the Manage Layouts.../Save Current Layout row below it. Shared with
     /// GetListArea so the two formulas can never drift out of sync with each other.</summary>
     private int NonListOverhead(int contentWidth) =>
-        (_model.HideTitle ? 0 : HeaderHeight) + ListVerticalPadding * 2
+        (_model.HideHeader ? 0 : HeaderHeight) + ListVerticalPadding * 2
         + BottomRowBottomPadding + RowHeight(contentWidth, BottomRowHeight, BottomRowGap, BottomRowWidths);
 
     /// <summary>Everything between the header and the Manage Layouts.../Save Current Layout row - the
@@ -566,7 +597,7 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
     /// disappear to nothing.</summary>
     protected override Rectangle GetListArea(int contentWidth, int contentHeight)
     {
-        var top = (_model.HideTitle ? 0 : HeaderHeight) + ListVerticalPadding;
+        var top = (_model.HideHeader ? 0 : HeaderHeight) + ListVerticalPadding;
         var available = contentHeight - NonListOverhead(contentWidth);
         var wanted = Math.Min(_model.RowsShown, ListRowCount) * ListRowHeight;
         var height = Math.Max(ListRowHeight, Math.Min(available, wanted));

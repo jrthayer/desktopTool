@@ -5,7 +5,7 @@ namespace DesktopTool.UI;
 /// Header Darkness/Opacity/Tint Strength sliders plus the Corner Radius/Margin steppers, in that
 /// order. A caller
 /// (FenceForm, LayoutLauncherWidget, or a future widget) builds its own full row list by
-/// prepending/appending whatever extra rows are specific to it (Hide Title, OCD Sizing, etc.)
+/// prepending/appending whatever extra rows are specific to it (Hide Header, OCD Sizing, etc.)
 /// around what Build (or, for a caller with its own differently-shaped slider/margin block,
 /// BuildColorGrid alone) returns here, instead of re-typing this same block - and re-risking a
 /// subtly different copy - every time.

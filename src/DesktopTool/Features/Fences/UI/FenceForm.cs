@@ -90,7 +90,7 @@ internal sealed class FenceForm : LayeredWidgetForm
     // Every WM_*/HT* message/hit-test code with a shared home (move/resize/rename/paint/erase-bkgnd
     // codes) is LayeredWidgetForm's own now - nothing needs its own copy here anymore.
 
-    // CmdToggleHideTitle/CmdToggleFullOpacityOnHover/CmdColorDefault/CmdColorCustom/CmdColorEyedrop/
+    // CmdToggleHideHeader/CmdToggleFullOpacityOnHover/CmdColorDefault/CmdColorCustom/CmdColorEyedrop/
     // CmdColorPresetBase are LayeredWidgetForm's own now (negative ids - see its own comment for why
     // that range can never collide with these).
     private const int CmdToggleHideLabels = 7;
@@ -98,6 +98,11 @@ internal sealed class FenceForm : LayeredWidgetForm
     private const int CmdResizeLeftRight = 10;
     private const int CmdResizeTopDown = 11;
     private const int CmdToggleOcdSizing = 12;
+    // Only ever shown while ButtonBandIsTight (see BuildAdditionalSettingsRows) - the same "+"/"x"
+    // actions the hand-drawn buttons give a wider fence, relocated here rather than lost when there's
+    // no room for those buttons.
+    private const int CmdCopyFence = 13;
+    private const int CmdDeleteFence = 14;
 
     // Not a real WM_COMMAND id - just this row's own Row.Id value for the non-clickable "Fence
     // Dimensions" section header inside the OCD flyout (see BuildAdditionalSettingsRows;
@@ -181,22 +186,52 @@ internal sealed class FenceForm : LayeredWidgetForm
             FormatDimensions(adjustWidth: true, adjustHeight: true);
     }
 
+    /// <summary>Repositions this fence so its own bottom-right corner sits margin px inside the
+    /// primary monitor's own working-area bottom-right corner - used by FenceManager.AddRecycleBin
+    /// right after ApplyOcdSizingIfEnabled, once _model.Bounds already holds this fence's real
+    /// OCD-fitted size, so the corner math uses the actual wrapped-tight size rather than a guessed
+    /// placeholder one.</summary>
+    public void MoveToBottomRight(int margin)
+    {
+        var workArea = Screen.PrimaryScreen!.WorkingArea;
+        var x = workArea.Right - margin - _model.Bounds.Width;
+        var y = workArea.Bottom - margin - _model.Bounds.Height;
+
+        ButtonRowAtBottom = ComputeButtonRowAtBottom(new Point(x, y), TopMargin);
+        NativeMethods.SetWindowPos(Handle, IntPtr.Zero, x - OuterMargin, y - TopBand, 0, 0,
+            NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+        _model.X = x;
+        _model.Y = y;
+        _manager.Save();
+    }
+
     /// <summary>Which model LayeredWidgetForm's own theme derivation (ThemedBody/Accent/etc) and
-    /// generic Settings-dropdown rows (Hide Title, Full Opacity When Active, the color grid/sliders)
+    /// generic Settings-dropdown rows (Hide Header, Full Opacity When Active, the color grid/sliders)
     /// read from - FenceModel already implements IWidgetStyle.</summary>
     protected override IWidgetStyle Style => _model;
 
-    protected override bool HideTitle
+    protected override bool HideHeader
     {
-        get => _model.HideTitle;
+        get => _model.HideHeader;
         set
         {
-            _model.HideTitle = value;
+            _model.HideHeader = value;
             _manager.Save();
             // Changes GridTop (see its own comment), which OCD Fence Sizing's fit is based on - only
             // height can possibly need to change here, never the columns/width.
             if (_model.OcdFenceSizing)
                 FormatDimensions(adjustWidth: false, adjustHeight: true);
+            RenderAndPresent();
+        }
+    }
+
+    protected override bool ShowHeaderCloseButton
+    {
+        get => _model.HeaderCloseButton;
+        set
+        {
+            _model.HeaderCloseButton = value;
+            _manager.Save();
             RenderAndPresent();
         }
     }
@@ -210,8 +245,8 @@ internal sealed class FenceForm : LayeredWidgetForm
     private int EffectiveCellHeight => _model.HideLabels ? IconTopPadding + IconSize + 8 : CellHeight;
 
     /// <summary>Where the item grid starts, content-relative - below the title bar normally, or
-    /// right at the top when FenceModel.HideTitle reclaims that space entirely.</summary>
-    private int GridTop => _model.HideTitle ? 0 : TitleBarHeight;
+    /// right at the top when FenceModel.HideHeader reclaims that space entirely.</summary>
+    private int GridTop => _model.HideHeader ? 0 : TitleBarHeight;
 
     protected override CreateParams CreateParams
     {
@@ -301,11 +336,23 @@ internal sealed class FenceForm : LayeredWidgetForm
         return Math.Max(0, rows * EffectiveCellHeight - availableHeight);
     }
 
+    /// <summary>Whether contentWidth has room for the full Settings-through-Delete button chain
+    /// (Settings, Copy Settings To, "+", "x" - see GetDeleteButtonRect's own "outermost... innermost"
+    /// comment) without its innermost buttons sliding past the window's own edge. A fence is allowed
+    /// to be narrower than this on purpose (a single-icon Fence Trash Can-style wrap, say) - rather
+    /// than forcing it wider just to fit two buttons it rarely needs, "+"/"x" simply stop being
+    /// hand-drawn buttons below this width and become "Copy Fence"/"Delete Fence" rows in the
+    /// Settings dropdown instead (see BuildAdditionalSettingsRows) - same actions, same reach, just
+    /// relocated rather than lost.</summary>
+    private bool ButtonBandIsTight(int contentWidth) =>
+        contentWidth < SettingsButtonWidth + SettingsButtonGap + CopySettingsButtonWidth + ButtonSpacing * 2 + SmallButtonSize * 2;
+
     /// <summary>Immediately inside the Copy Settings button (i.e. between it and the fence body)
     /// rather than anchored to its own corner - moves and flips sides together with
     /// LayeredWidgetForm's own GetCopySettingsButtonRect as a pair, always adjacent to it (which is
     /// itself always adjacent to Settings - see that method's own comment). Duplicates this fence's
-    /// settings into a new, empty fence (see FenceManager.CreateFenceLike) when clicked.</summary>
+    /// settings into a new, empty fence (see FenceManager.CreateFenceLike) when clicked. Only
+    /// meaningful while !ButtonBandIsTight - every caller already guards on that first.</summary>
     private Rectangle GetNewFenceButtonRect(int contentWidth, bool onLeft)
     {
         var settingsRect = GetCopySettingsButtonRect(contentWidth, onLeft);
@@ -330,6 +377,9 @@ internal sealed class FenceForm : LayeredWidgetForm
     /// "always fully visible regardless of Style.Opacity" treatment Settings already gets for free.</summary>
     protected override IEnumerable<Rectangle> AdditionalFullOpacityRegions(int contentWidth)
     {
+        if (ButtonBandIsTight(contentWidth))
+            yield break;
+
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
         yield return ToWindow(GetNewFenceButtonRect(contentWidth, onLeft));
         yield return ToWindow(GetDeleteButtonRect(contentWidth, onLeft));
@@ -398,7 +448,7 @@ internal sealed class FenceForm : LayeredWidgetForm
         base.OnMouseDoubleClick(e);
 
         // Rename is only reachable via the title text itself (double-click or right-click, gated on
-        // IsOverTitleRow - now LayeredWidgetForm's own) - no fallback here when FenceModel.HideTitle
+        // IsOverTitleRow - now LayeredWidgetForm's own) - no fallback here when FenceModel.HideHeader
         // leaves no title bar to click at all; renaming just isn't reachable that way then, rather
         // than an empty double-click anywhere substituting for it.
         if (IndexAtGridPosition(ToContent(e.Location)) is not int index)
@@ -420,6 +470,9 @@ internal sealed class FenceForm : LayeredWidgetForm
         var contentSize = GetContentSize();
         var onLeft = ShouldSettingsButtonOpenLeft(contentSize.Width);
 
+        if (TryArmHeaderCloseButton(contentPoint))
+            return;
+
         if (ShowsButtons && GetSettingsButtonRect(contentSize.Width, onLeft).Contains(contentPoint))
         {
             _settingsButtonArmed = true;
@@ -429,13 +482,13 @@ internal sealed class FenceForm : LayeredWidgetForm
         if (ShowsButtons && TryArmCopySettingsButton(contentPoint))
             return;
 
-        if (ShowsButtons && GetNewFenceButtonRect(contentSize.Width, onLeft).Contains(contentPoint))
+        if (ShowsButtons && !ButtonBandIsTight(contentSize.Width) && GetNewFenceButtonRect(contentSize.Width, onLeft).Contains(contentPoint))
         {
             _newFenceButtonArmed = true;
             return;
         }
 
-        if (ShowsButtons && GetDeleteButtonRect(contentSize.Width, onLeft).Contains(contentPoint))
+        if (ShowsButtons && !ButtonBandIsTight(contentSize.Width) && GetDeleteButtonRect(contentSize.Width, onLeft).Contains(contentPoint))
         {
             _deleteButtonArmed = true;
             return;
@@ -517,7 +570,7 @@ internal sealed class FenceForm : LayeredWidgetForm
 
         string? text = null;
         Rectangle buttonRect = default;
-        if (ShowsButtons)
+        if (ShowsButtons && !ButtonBandIsTight(contentSize.Width))
         {
             if (GetNewFenceButtonRect(contentSize.Width, onLeft) is var newFenceRect && newFenceRect.Contains(contentPoint))
             {
@@ -586,6 +639,8 @@ internal sealed class FenceForm : LayeredWidgetForm
             return;
 
         var onLeft = ShouldSettingsButtonOpenLeft(GetContentSize().Width);
+
+        FireArmedHeaderCloseButton(ToContent(e.Location));
 
         if (_settingsButtonArmed)
         {
@@ -782,8 +837,13 @@ internal sealed class FenceForm : LayeredWidgetForm
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
         if (ShowsButtons && (GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
             || GetCopySettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
-            || GetNewFenceButtonRect(contentWidth, onLeft).Contains(contentPoint)
-            || GetDeleteButtonRect(contentWidth, onLeft).Contains(contentPoint)))
+            || (!ButtonBandIsTight(contentWidth) && (GetNewFenceButtonRect(contentWidth, onLeft).Contains(contentPoint)
+                || GetDeleteButtonRect(contentWidth, onLeft).Contains(contentPoint)))))
+            return HTCLIENT;
+
+        // Not gated by ShowsButtons, unlike every check above - see IsOverHeaderCloseButton's own
+        // comment.
+        if (IsOverHeaderCloseButton(contentPoint))
             return HTCLIENT;
 
         if (ShowsButtons)
@@ -817,7 +877,7 @@ internal sealed class FenceForm : LayeredWidgetForm
         // longer moves the fence (only the margin does, and only once already active - see the
         // ShowsButtons branch above). Right-click/double-click (rename) and hover still work
         // the same as any other non-client area - see HTBORDER's own comment.
-        if (!_model.HideTitle && y - TopBand <= TitleBarHeight)
+        if (!_model.HideHeader && y - TopBand <= TitleBarHeight)
             return HTBORDER;
 
         return HTCLIENT;
@@ -837,7 +897,7 @@ internal sealed class FenceForm : LayeredWidgetForm
         // buttons chained off Settings, and the item grid (see PaintItems).
         PaintChrome(g, contentWidth, contentHeight);
 
-        if (ShowsButtons)
+        if (ShowsButtons && !ButtonBandIsTight(contentWidth))
         {
             // Same opaque-backing reasoning as PaintChrome's own Settings button - filled before the
             // copy glyph is stroked on top (see MarginFillColor's own comment).
@@ -905,11 +965,8 @@ internal sealed class FenceForm : LayeredWidgetForm
             var cellX = GridPadding + column * CellWidth;
             var cellY = GridTop + GridPadding + row * EffectiveCellHeight - _scrollbar.Offset;
 
-            // A scrolled row can straddle the grid-top boundary. g.Clip normally handles that for
-            // shapes/icons (GDI+ respects it), but TextRenderer.DrawText (GDI) draws its text in
-            // full regardless of the clip region - the same disregard-for-Graphics-state quirk as
-            // TranslateTransform above, just for clipping instead of position. So icons rely on the
-            // clip as usual, but labels only draw when their whole rect is already within bounds.
+            // A scrolled row can straddle the grid-top boundary - skip painting one entirely once
+            // it's fully off either edge, rather than relying on g.Clip alone to hide it.
             if (cellY + EffectiveCellHeight <= GridTop || cellY >= height)
                 continue;
 
@@ -941,16 +998,21 @@ internal sealed class FenceForm : LayeredWidgetForm
             var labelHeight = CellHeight - IconTopPadding - IconSize - 2;
             if (labelTop >= GridTop)
             {
-                // Only the bottom can need trimming here (the top is already in bounds), so
-                // shrinking the rect's height is a true clip - unlike g.Clip, TextRenderer.DrawText
-                // does respect its own rect parameter (DT_NOCLIP isn't set), cutting off whatever
-                // doesn't fit rather than needing the whole label to fit or nothing.
+                // Only the bottom can need trimming here (the top is already in bounds).
                 var visibleHeight = Math.Min(labelHeight, height - labelTop);
                 if (visibleHeight > 0)
                 {
                     var labelRect = ToWindow(new Rectangle(cellX, labelTop, CellWidth, visibleHeight));
-                    TextRenderer.DrawText(g, GetDisplayName(item), Font, labelRect, Color.WhiteSmoke,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.WordBreak);
+                    // GDI+'s DrawString instead of GDI's TextRenderer.DrawText - see
+                    // LayeredWidgetForm.PaintChrome's own title text for why (ClearType fringing,
+                    // plus TextRenderer ignoring Graphics.Transform under RenderAndPresent's
+                    // supersampling).
+                    var previousTextHint = g.TextRenderingHint;
+                    g.TextRenderingHint = TextRenderingHint.AntiAlias;
+                    using (var textBrush = new SolidBrush(Color.WhiteSmoke))
+                    using (var textFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Near, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.LineLimit })
+                        g.DrawString(GetDisplayName(item), Font, textBrush, labelRect, textFormat);
+                    g.TextRenderingHint = previousTextHint;
                 }
             }
         }
@@ -1121,7 +1183,7 @@ internal sealed class FenceForm : LayeredWidgetForm
     }
 
     // Title/TitleRowHeight below are the only rename-related hooks left with a fence-specific
-    // answer - TitleVisible (derived from HideTitle), ChromeMenuFieldColor/HoverColor, and
+    // answer - TitleVisible (derived from HideHeader), ChromeMenuFieldColor/HoverColor, and
     // EditBoxTextColor/BackgroundColor are all LayeredWidgetForm's own defaults now (ChromeFill/
     // ThemedMenuSelected/ThemedBody, exactly what this used to override them to).
 
@@ -1139,29 +1201,43 @@ internal sealed class FenceForm : LayeredWidgetForm
 
     /// <summary>Everything genuinely unique to a fence, not shared with any other widget on this
     /// base - shown in the "Additional" flyout LayeredWidgetForm's own default BuildSettingsRows adds
-    /// at the top of the menu when this returns non-empty. Hide Title/Full Opacity When Active/the
+    /// at the top of the menu when this returns non-empty. Hide Header/Full Opacity When Active/the
     /// color grid/sliders/Corner Radius/Margin are all the base's own default rows now - this fence
     /// doesn't need to (and no longer does) rebuild the whole row list just to add these three.
-    /// "Delete Fence" isn't a row here either way - it's the "x" button next to Settings (see
-    /// GetDeleteButtonRect/ConfirmDelete), same as "Rename" lives in the header's own context menu.</summary>
-    protected override IReadOnlyList<DropdownMenu.Row>? BuildAdditionalSettingsRows() => new List<DropdownMenu.Row>
+    /// "Copy Fence"/"Delete Fence" normally live only as the "+"/"x" buttons next to Settings (see
+    /// GetNewFenceButtonRect/GetDeleteButtonRect/ConfirmDelete) - they only show up here too, at the
+    /// very top, once ButtonBandIsTight means those buttons aren't drawn at all (see PaintContent's
+    /// own gate), so the actions stay reachable rather than disappearing on a narrow fence. "Rename"
+    /// still only ever lives in the header's own context menu, regardless of width.</summary>
+    protected override IReadOnlyList<DropdownMenu.Row>? BuildAdditionalSettingsRows()
     {
-        new(CmdToggleHideLabels, "Hide Shortcut Names", HasCheckbox: true, IsChecked: () => _model.HideLabels),
-        new(CmdToggleOcdSizing, "OCD Fence Sizing", HasCheckbox: true, IsChecked: () => _model.OcdFenceSizing,
-            Tooltip: GetMenuTooltipText(CmdToggleOcdSizing)),
-        new(0, string.Empty, IsSeparator: true),
+        var rows = new List<DropdownMenu.Row>();
+
+        if (ButtonBandIsTight(GetContentSize().Width))
+        {
+            rows.Add(new DropdownMenu.Row(CmdCopyFence, "Copy Fence"));
+            rows.Add(new DropdownMenu.Row(CmdDeleteFence, "Delete Fence"));
+            rows.Add(new DropdownMenu.Row(0, string.Empty, IsSeparator: true));
+        }
+
+        rows.Add(new DropdownMenu.Row(CmdToggleHideLabels, "Hide Shortcut Names", HasCheckbox: true, IsChecked: () => _model.HideLabels));
+        rows.Add(new DropdownMenu.Row(CmdToggleOcdSizing, "OCD Fence Sizing", HasCheckbox: true, IsChecked: () => _model.OcdFenceSizing,
+            Tooltip: GetMenuTooltipText(CmdToggleOcdSizing)));
+        rows.Add(new DropdownMenu.Row(0, string.Empty, IsSeparator: true));
         // A nested flyout instead of an inline "Fence Dimensions" header/group (see
         // DropdownMenu.Row.Submenu) - one fewer always-visible row, and "OCD" doubles as a nod to
         // "OCD Fence Sizing" just above it.
-        new(0, "OCD", Submenu: new List<DropdownMenu.Row>
+        rows.Add(new DropdownMenu.Row(0, "OCD", Submenu: new List<DropdownMenu.Row>
         {
             new(TagFenceDimensionsHeader, "Fence Dimensions", IsHeader: true),
             new(0, string.Empty, IsSeparator: true),
             new(CmdResizeBoth, "Both"),
             new(CmdResizeLeftRight, "Left/Right"),
             new(CmdResizeTopDown, "Top/Down"),
-        }),
-    };
+        }));
+
+        return rows;
+    }
 
     // SettingsMenuFieldColor/HoverColor/AccentColor/BorderColor/TooltipColor and the dropdown's own
     // reposition-on-resize are all LayeredWidgetForm's own defaults now (ChromeFill/ThemedMenuSelected/
@@ -1179,7 +1255,7 @@ internal sealed class FenceForm : LayeredWidgetForm
     };
 
     /// <summary>Dispatches a clicked Settings-dropdown row id - only this fence's own additional-rows
-    /// ids (see BuildAdditionalSettingsRows) need handling here; everything else (Hide Title, Full
+    /// ids (see BuildAdditionalSettingsRows) need handling here; everything else (Hide Header, Full
     /// Opacity, the color/sliders/Corner Radius/Margin rows) is LayeredWidgetForm's own default
     /// row set, so falls through to its own HandleSettingsCommand - which still ends up calling this
     /// fence's own SetTintColor/SetOpacity/etc. overrides via ordinary virtual dispatch.</summary>
@@ -1187,6 +1263,8 @@ internal sealed class FenceForm : LayeredWidgetForm
     {
         switch (id)
         {
+            case CmdCopyFence: _manager.CreateFenceLike(FenceId); break;
+            case CmdDeleteFence: ConfirmDelete(); break;
             case CmdToggleHideLabels: ToggleHideLabels(); break;
             case CmdResizeBoth: FormatDimensions(adjustWidth: true, adjustHeight: true); break;
             case CmdResizeLeftRight: FormatDimensions(adjustWidth: true, adjustHeight: false); break;
@@ -1375,6 +1453,13 @@ internal sealed class FenceForm : LayeredWidgetForm
         if (result == DialogResult.Yes)
             _manager.DeleteFence(FenceId);
     }
+
+    /// <summary>Routes the header close button (see ShowHeaderCloseButton/LayeredWidgetForm's own
+    /// OnHeaderCloseButtonClick doc comment for why the base's plain Close() isn't safe here) through
+    /// this fence's own already-confirmed delete flow instead - the same "×" Delete button uses, and
+    /// the only "close" concept a fence actually has, since it has no per-fence hide state of its
+    /// own.</summary>
+    protected override void OnHeaderCloseButtonClick() => ConfirmDelete();
 
     // Thin wrapper kept under this file's own name/call sites rather than switching every one of
     // them to RoundedRectPath.Full directly - same behavior, smaller diff.

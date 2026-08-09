@@ -1,11 +1,11 @@
 namespace DesktopTool.UI;
 
-/// <summary>The IWidgetStyle knobs - plus HideTitle, which isn't part of that interface but was
-/// still redeclared identically everywhere IWidgetStyle was - that FenceModel, LayoutLauncherModel,
-/// and WidgetManagerModel used to each retype byte-for-byte. Centralized here so a fourth widget
-/// wanting the same styling only has to inherit this instead of retyping (and re-risking a subtly
-/// different copy of) all twelve properties again - see each property's own doc comment on
-/// IWidgetStyle for what it actually does.
+/// <summary>The IWidgetStyle knobs - plus HideHeader/HeaderCloseButton, which aren't part of that
+/// interface but were still redeclared identically everywhere IWidgetStyle was - that FenceModel,
+/// LayoutLauncherModel, and WidgetManagerModel used to each retype byte-for-byte. Centralized here so
+/// a fourth widget wanting the same styling only has to inherit this instead of retyping (and
+/// re-risking a subtly different copy of) all twelve properties again - see each property's own doc
+/// comment on IWidgetStyle for what it actually does.
 ///
 /// Position/size/title/visibility stay out of this base on purpose - FenceModel's own shape there
 /// (non-nullable X/Y/Width/Height with real starting defaults, a Name rather than a Title, no
@@ -44,8 +44,16 @@ public abstract class WidgetStyleModel : IWidgetStyle
     public bool HeaderBorderMode { get; set; }
     public bool LightBorder { get; set; }
 
-    /// <summary>Not part of IWidgetStyle (it's read/written through LayeredWidgetForm.HideTitle
+    /// <summary>Not part of IWidgetStyle (it's read/written through LayeredWidgetForm.HideHeader
     /// instead, which each subclass wires to this same property) - identical across every widget
-    /// model regardless, so it lives here rather than being re-typed three times too.</summary>
-    public bool HideTitle { get; set; }
+    /// model regardless, so it lives here rather than being re-typed three times too. Hides the
+    /// entire title row, not just its text - see LayeredWidgetForm.TitleVisible.</summary>
+    public bool HideHeader { get; set; }
+
+    /// <summary>Not part of IWidgetStyle either, same reasoning as HideHeader above - read/written
+    /// through LayeredWidgetForm.ShowHeaderCloseButton. Off by default for every widget except
+    /// ReadmeWidget (see its own constructor) - a persistent widget like a Fence is normally
+    /// shown/hidden from Widget Manager rather than closed, so an always-visible close glyph in its
+    /// header is opt-in rather than the default.</summary>
+    public bool HeaderCloseButton { get; set; }
 }

@@ -113,6 +113,11 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         _model = model;
         _store = store;
 
+        // Keeps the Layout Launcher row's own switch from going stale whenever Visible changes via
+        // some path other than this widget's own row click (ToggleRow already repaints itself right
+        // there) - see LayoutLauncherWidget.VisibilityChanged's own doc comment.
+        _layoutLauncher.VisibilityChanged += (_, _) => RefreshRowStates();
+
         ExtraButtons = new List<ChromeButton>
         {
             new("?", 22, () => HelpRequested?.Invoke(this, EventArgs.Empty)),
@@ -278,6 +283,11 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             || TryGetExtraButtonAt(contentWidth, onLeft, contentPoint, out _)))
             return HTCLIENT;
 
+        // Not gated by ShowsButtons, unlike every check above - see IsOverHeaderCloseButton's own
+        // comment.
+        if (IsOverHeaderCloseButton(contentPoint))
+            return HTCLIENT;
+
         // Every row's switch/button lives inside the list area, already ordinary HTCLIENT
         // territory below - no extra carve-out needed here, unlike the margin-band Settings/extra
         // buttons above.
@@ -300,7 +310,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         // HTBORDER, not HTCAPTION - a left-button drag from the title row itself doesn't move the
         // widget (only the margin does, once active - see above); right-click/double-click/hover
         // still work (see HTBORDER's own comment on LayeredWidgetForm).
-        if (!_model.HideTitle && y - TopBand <= HeaderHeight)
+        if (!_model.HideHeader && y - TopBand <= HeaderHeight)
             return HTBORDER;
 
         return HTCLIENT;
@@ -316,6 +326,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         var contentWidth = GetContentSize().Width;
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
 
+        if (TryArmHeaderCloseButton(contentPoint))
+            return;
         if (ShowsButtons && GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint))
         {
             _settingsButtonArmed = true;
@@ -369,6 +381,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         var contentWidth = GetContentSize().Width;
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
 
+        FireArmedHeaderCloseButton(contentPoint);
+
         if (_settingsButtonArmed)
         {
             _settingsButtonArmed = false;
@@ -406,12 +420,23 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
     protected override int TitleRowHeight => HeaderHeight;
 
-    protected override bool HideTitle
+    protected override bool HideHeader
     {
-        get => _model.HideTitle;
+        get => _model.HideHeader;
         set
         {
-            _model.HideTitle = value;
+            _model.HideHeader = value;
+            Persist();
+            RenderAndPresent();
+        }
+    }
+
+    protected override bool ShowHeaderCloseButton
+    {
+        get => _model.HeaderCloseButton;
+        set
+        {
+            _model.HeaderCloseButton = value;
             Persist();
             RenderAndPresent();
         }
@@ -504,7 +529,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// <summary>The body height that fits exactly n rows, at this widget's own fixed header/padding
     /// overhead - same formula GetListArea itself measures against, just solved for total height.</summary>
     private int HeightForRows(int rows) =>
-        (_model.HideTitle ? 0 : HeaderHeight) + ListVerticalPadding * 2 + rows * ListRowHeightConst;
+        (_model.HideHeader ? 0 : HeaderHeight) + ListVerticalPadding * 2 + rows * ListRowHeightConst;
 
     /// <summary>Sets the widget's own persisted+actual body height directly, keeping its top edge
     /// fixed (only the bottom edge moves) - same SetWindowPos approach as LayoutLauncherWidget's own
@@ -530,7 +555,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// same as LayoutLauncherWidget.GetListArea's own doc comment describes for its own list.</summary>
     protected override Rectangle GetListArea(int contentWidth, int contentHeight)
     {
-        var top = (_model.HideTitle ? 0 : HeaderHeight) + ListVerticalPadding;
+        var top = (_model.HideHeader ? 0 : HeaderHeight) + ListVerticalPadding;
         var available = Math.Max(ListRowHeight, contentHeight - top - ListVerticalPadding);
         var wanted = Math.Min(_model.RowsShown, RowCountFixed) * ListRowHeight;
         var height = Math.Max(ListRowHeight, Math.Min(available, wanted));

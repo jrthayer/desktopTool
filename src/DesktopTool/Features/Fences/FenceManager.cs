@@ -73,7 +73,8 @@ public sealed class FenceManager : IDisposable
     }
 
     /// <summary>Same idea as CreateFence, but seeded from an existing fence's settings (every
-    /// IWidgetStyle knob, plus HideTitle/HideLabels/OCD sizing and size) instead of the defaults -
+    /// IWidgetStyle knob, plus HideHeader/HeaderCloseButton/HideLabels/OCD sizing and size) instead
+    /// of the defaults -
     /// see FenceForm's "+" button next to Settings. Deliberately doesn't copy Files or Bounds' own
     /// position: this is "another fence styled and sized the same way", not a clone of its contents
     /// or a stack-on-top-of-the-original duplicate.</summary>
@@ -88,7 +89,7 @@ public sealed class FenceManager : IDisposable
             Name = $"Fence {_models.Count + 1}",
             Bounds = NextDefaultBounds(source.Bounds.Size),
             HideLabels = source.HideLabels,
-            HideTitle = source.HideTitle,
+            HideHeader = source.HideHeader,
             OcdFenceSizing = source.OcdFenceSizing,
             TintColor = source.TintColor,
             TintIsExact = source.TintIsExact,
@@ -102,6 +103,7 @@ public sealed class FenceManager : IDisposable
             TitleAlignment = source.TitleAlignment,
             HeaderBorderMode = source.HeaderBorderMode,
             LightBorder = source.LightBorder,
+            HeaderCloseButton = source.HeaderCloseButton,
         };
         _models.Add(model);
         ShowFence(model);
@@ -230,11 +232,12 @@ public sealed class FenceManager : IDisposable
     /// the least ambiguous place to put it; the item can still be dragged into a different fence
     /// afterward like any other. No-ops if one already exists anywhere - see HasRecycleBin.
     ///
-    /// Starts with no header (HideTitle), no label under the icon (HideLabels), and OCD Fence Sizing
+    /// Starts with no header (HideHeader), no label under the icon (HideLabels), and OCD Fence Sizing
     /// on, then fires ApplyOcdSizingIfEnabled once right after showing it - otherwise OCD Fence
     /// Sizing wouldn't actually tidy the bounds until the next manual resize (see FenceForm.OnDragEnd),
     /// leaving this brand-new fence sized like an ordinary one instead of wrapped tight around the
-    /// single icon.</summary>
+    /// single icon. MoveToBottomRight runs after that, not before, so it can anchor against this
+    /// fence's own real wrapped-tight size instead of NextDefaultBounds' own placeholder one.</summary>
     public void AddRecycleBin()
     {
         if (HasRecycleBin)
@@ -244,7 +247,7 @@ public sealed class FenceManager : IDisposable
         {
             Name = "Recycle Bin",
             Bounds = NextDefaultBounds(),
-            HideTitle = true,
+            HideHeader = true,
             HideLabels = true,
             OcdFenceSizing = true,
         };
@@ -252,6 +255,7 @@ public sealed class FenceManager : IDisposable
         _models.Add(model);
         var form = ShowFence(model);
         form.ApplyOcdSizingIfEnabled();
+        form.MoveToBottomRight(margin: 20);
         RecycleBinIconManager.SetHidden(true);
         Save();
     }
@@ -470,8 +474,8 @@ public sealed class FenceManager : IDisposable
 
     /// <summary>Flushes every fence's current model state to disk - internal rather than private now
     /// that FenceForm calls this directly after mutating its own model in place (position, name,
-    /// every IWidgetStyle property, Hide Title/Labels, OCD Sizing - see LayeredWidgetForm's own
-    /// PersistStyle and FenceForm's HideTitle/Title setters), instead of routing each individual
+    /// every IWidgetStyle property, Hide Header/Labels, OCD Sizing - see LayeredWidgetForm's own
+    /// PersistStyle and FenceForm's HideHeader/Title setters), instead of routing each individual
     /// field change through its own dedicated FenceManager method. FenceManager's own remaining
     /// methods are everything that genuinely needs the shared _models/_forms collections - item-grid
     /// content, lifecycle, z-order, spatial/cross-fence queries - not per-field persistence for a

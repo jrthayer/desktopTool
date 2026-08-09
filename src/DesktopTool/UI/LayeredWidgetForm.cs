@@ -103,7 +103,7 @@ internal abstract class LayeredWidgetForm : Form
     // translucent-white hover tint a Fence's own icon-grid cells use (see PaintButtonHoverTint),
     // just for Settings/ChromeButton/ContentButton instead. Recomputed on every OnMouseMove/
     // OnMouseLeave (see UpdateButtonHover), repainting only on an actual change.
-    private enum HoveredButtonKind { None, Settings, CopySettings, Extra, Content }
+    private enum HoveredButtonKind { None, Settings, CopySettings, Extra, Content, HeaderClose }
     private HoveredButtonKind _hoveredButtonKind = HoveredButtonKind.None;
     private int _hoveredButtonIndex = -1;
 
@@ -279,7 +279,7 @@ internal abstract class LayeredWidgetForm : Form
     // Every widget on this base is styled from a live IWidgetStyle (tint color, header darkness,
     // opacity, full-opacity-on-hover, tint strength, snap margin) - a fence's own FenceModel and the
     // Layout Launcher's own LayoutLauncherModel both already implement it. Base owns the derivation
-    // (ThemedBody/ThemedTitle/etc below) and the generic Settings-dropdown rows (Hide Title, Full
+    // (ThemedBody/ThemedTitle/etc below) and the generic Settings-dropdown rows (Hide Header, Full
     // Opacity When Active, the shared color grid/sliders/margin stepper) that follow from it, so a
     // subclass with nothing further to add (Layout Launcher, chrome-only for now) gets a fully
     // working Settings menu for free; one with more to show (a Fence's own Hide Shortcut
@@ -291,13 +291,21 @@ internal abstract class LayeredWidgetForm : Form
     /// Layout Launcher its LayoutLauncherModel, both already implementing this.</summary>
     protected abstract IWidgetStyle Style { get; }
 
-    /// <summary>Whether the title row's text is currently hidden - a plain settable flag most of a
-    /// subclass's own persisted model already has (FenceModel.HideTitle, LayoutLauncherModel.HideTitle),
-    /// not part of IWidgetStyle itself since it affects the title row rather than tint/opacity. The
-    /// setter is responsible for persisting, the same way Title's own setter is.</summary>
-    protected abstract bool HideTitle { get; set; }
+    /// <summary>Whether the entire title row is currently hidden (reclaiming its space for content,
+    /// not just blanking its text) - a plain settable flag most of a subclass's own persisted model
+    /// already has (FenceModel.HideHeader, LayoutLauncherModel.HideHeader), not part of IWidgetStyle
+    /// itself since it affects the title row rather than tint/opacity. The setter is responsible for
+    /// persisting, the same way Title's own setter is.</summary>
+    protected abstract bool HideHeader { get; set; }
 
-    protected virtual bool TitleVisible => !HideTitle;
+    protected virtual bool TitleVisible => !HideHeader;
+
+    /// <summary>Whether an always-visible "×" close glyph paints in the title row itself (see
+    /// PaintChrome/GetHeaderCloseButtonRect), independent of ShowsButtons - unlike the Settings/
+    /// CopySettings/Extra button band, which only appears once the widget is "engaged" (right-click
+    /// or title click), this is meant to be reachable without that first step. Same
+    /// persisted-per-subclass-model shape as HideHeader above.</summary>
+    protected abstract bool ShowHeaderCloseButton { get; set; }
 
     // Fallback palette for an untinted element - virtual so a future subclass wanting a genuinely
     // different base look could override one, but both current subclasses share these exact values
@@ -438,13 +446,14 @@ internal abstract class LayeredWidgetForm : Form
     // Shared Settings-dropdown command ids - negative, so they can never collide with a subclass's
     // own positive-numbered command ids (a Fence's CmdToggleHideLabels, CmdToggleOcdSizing, etc.)
     // without either side needing to know about the other's numbering.
-    protected const int CmdToggleHideTitle = -1;
+    protected const int CmdToggleHideHeader = -1;
     protected const int CmdToggleFullOpacityOnHover = -2;
     protected const int CmdColorDefault = -3;
     protected const int CmdColorCustom = -4;
     protected const int CmdColorEyedrop = -5;
     protected const int CmdToggleHeaderBorderMode = -6;
     protected const int CmdToggleLightBorder = -7;
+    protected const int CmdToggleHeaderCloseButton = -8;
     // Reserves -1000..-901 (100 ids) for the color-preset grid.
     protected const int CmdColorPresetBase = -1000;
 
@@ -484,9 +493,10 @@ internal abstract class LayeredWidgetForm : Form
     }
 
     /// <summary>"Copy Settings To" (see CopySettingsOverlay) - applies source's own Base settings
-    /// (every IWidgetStyle property, plus HideTitle - the Form's own abstract property, not part of
-    /// IWidgetStyle, but still a Base-flyout setting) onto this widget, entirely through the Style/
-    /// HideTitle interfaces, so no downcast to any concrete model type is needed here. Deliberately
+    /// (every IWidgetStyle property, plus HideHeader/ShowHeaderCloseButton - the Form's own abstract
+    /// properties, not part of IWidgetStyle, but still Base-flyout settings) onto this widget,
+    /// entirely through the Style/HideHeader/ShowHeaderCloseButton interfaces, so no downcast to any
+    /// concrete model type is needed here. Deliberately
     /// never touches position/size/title text/Visible - those are this widget's own identity/
     /// placement, not "settings" a paint-bucket tool should overwrite.
     ///
@@ -508,7 +518,8 @@ internal abstract class LayeredWidgetForm : Form
         Style.TitleAlignment = source.Style.TitleAlignment;
         Style.HeaderBorderMode = source.Style.HeaderBorderMode;
         Style.LightBorder = source.Style.LightBorder;
-        HideTitle = source.HideTitle;
+        HideHeader = source.HideHeader;
+        ShowHeaderCloseButton = source.ShowHeaderCloseButton;
 
         if (GetType() == source.GetType())
             CopyAdditionalSettingsFrom(source);
@@ -580,6 +591,13 @@ internal abstract class LayeredWidgetForm : Form
         new(CmdToggleLightBorder, "Light Border", HasCheckbox: true,
             IsChecked: () => Style.LightBorder,
             Tooltip: "Border the title row on its own, in the plain default color, independent of Header Border Mode"),
+        new(0, string.Empty, IsSeparator: true),
+        // Unlike every other row in this flyout, paints/hit-tests regardless of ShowsButtons (see
+        // GetHeaderCloseButtonRect/PaintChrome's own close-glyph draw) - the whole point is a close
+        // action reachable without first engaging the widget the way Settings/Extra buttons require.
+        new(CmdToggleHeaderCloseButton, "Close Button", HasCheckbox: true,
+            IsChecked: () => ShowHeaderCloseButton,
+            Tooltip: "Always show a close button in the title row, without needing to right-click or click the title first"),
     };
 
     /// <summary>Floor for Opacity (see StyleMenuRows.Build's own slider, which otherwise allows the
@@ -591,7 +609,7 @@ internal abstract class LayeredWidgetForm : Form
     /// copies of this exact clamp, which had drifted to two different floors, 15 and 5).</summary>
     protected const int MinOpacity = 15;
 
-    /// <summary>The "Header" flyout (see BuildHeaderSettingsRows), then Hide Title, Full Opacity When
+    /// <summary>The "Header" flyout (see BuildHeaderSettingsRows), then Hide Header, Full Opacity When
     /// Active, and the shared color grid/Header Darkness/Opacity/Tint Strength sliders/Corner Radius/
     /// Margin steppers (StyleMenuRows.Build) - every setting LayeredWidgetForm itself owns, regardless
     /// of subclass. Shown in its own "Base" flyout (see BuildSettingsRows) rather than inline, so it
@@ -609,7 +627,7 @@ internal abstract class LayeredWidgetForm : Form
         {
             new(0, "Header", Submenu: BuildHeaderSettingsRows()),
             new(0, string.Empty, IsSeparator: true),
-            new(CmdToggleHideTitle, "Hide Title", HasCheckbox: true, IsChecked: () => HideTitle),
+            new(CmdToggleHideHeader, "Hide Header", HasCheckbox: true, IsChecked: () => HideHeader),
             new(CmdToggleFullOpacityOnHover, "Full Opacity When Active", HasCheckbox: true,
                 IsChecked: () => Style.FullOpacityOnHover,
                 Tooltip: "Full opacity while hovered, dragged/resized, or this menu is open"),
@@ -679,8 +697,8 @@ internal abstract class LayeredWidgetForm : Form
     {
         switch (id)
         {
-            case CmdToggleHideTitle:
-                HideTitle = !HideTitle;
+            case CmdToggleHideHeader:
+                HideHeader = !HideHeader;
                 RenderAndPresent();
                 break;
             case CmdToggleFullOpacityOnHover:
@@ -703,6 +721,10 @@ internal abstract class LayeredWidgetForm : Form
             case CmdToggleLightBorder:
                 Style.LightBorder = !Style.LightBorder;
                 PersistStyle();
+                RenderAndPresent();
+                break;
+            case CmdToggleHeaderCloseButton:
+                ShowHeaderCloseButton = !ShowHeaderCloseButton;
                 RenderAndPresent();
                 break;
             case CmdColorDefault:
@@ -790,14 +812,40 @@ internal abstract class LayeredWidgetForm : Form
 
         if (TitleVisible && !IsRenaming)
         {
-            var alignFlag = Style.TitleAlignment switch
+            var alignment = Style.TitleAlignment switch
             {
-                TitleAlignment.Center => TextFormatFlags.HorizontalCenter,
-                TitleAlignment.Right => TextFormatFlags.Right,
-                _ => TextFormatFlags.Left,
+                TitleAlignment.Center => StringAlignment.Center,
+                TitleAlignment.Right => StringAlignment.Far,
+                _ => StringAlignment.Near,
             };
-            TextRenderer.DrawText(g, Title, TitleFont, ToWindow(new Rectangle(8, 0, contentWidth - 16, TitleRowHeight)),
-                Color.WhiteSmoke, TextFormatFlags.VerticalCenter | alignFlag | TextFormatFlags.EndEllipsis);
+
+            // GDI+'s DrawString instead of GDI's TextRenderer.DrawText - same reasoning as
+            // PaintSettingsButton's own comment just below (ClearType fringing against a saturated
+            // background), plus DrawString respects Graphics.Transform, which TextRenderer.DrawText
+            // does not - see RenderAndPresent's own supersampling comment.
+            var previousTextHint = g.TextRenderingHint;
+            g.TextRenderingHint = TextRenderingHint.AntiAlias;
+            using (var textBrush = new SolidBrush(Color.WhiteSmoke))
+            using (var textFormat = new StringFormat { Alignment = alignment, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                g.DrawString(Title, TitleFont, textBrush, ToWindow(new Rectangle(8, 0, TitleRowAvailableWidth(contentWidth), TitleRowHeight)), textFormat);
+            g.TextRenderingHint = previousTextHint;
+        }
+
+        // Unlike the title text above, paints regardless of IsRenaming - the rename edit box already
+        // stops short of it (see BeginRename), so there's no overlap to avoid, and no reason to make
+        // closing unreachable just because a rename happens to be in progress.
+        if (TitleVisible && ShowHeaderCloseButton)
+        {
+            var closeButtonRect = ToWindow(GetHeaderCloseButtonRect(contentWidth));
+            if (_hoveredButtonKind == HoveredButtonKind.HeaderClose)
+                PaintButtonHoverTint(g, closeButtonRect);
+
+            var previousTextHint = g.TextRenderingHint;
+            g.TextRenderingHint = TextRenderingHint.AntiAlias;
+            using (var textBrush = new SolidBrush(Color.WhiteSmoke))
+            using (var textFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                g.DrawString("×", Font, textBrush, closeButtonRect, textFormat);
+            g.TextRenderingHint = previousTextHint;
         }
 
         if (ShowsButtons)
@@ -1681,13 +1729,21 @@ internal abstract class LayeredWidgetForm : Form
         }
     }
 
+    /// <summary>How much width the title row's own text (or its rename edit box, see BeginRename)
+    /// has to work with, content-relative - contentWidth minus the 8px margin either side, minus the
+    /// header close button's own reserved space when it's showing (see GetHeaderCloseButtonRect).
+    /// Shared by PaintChrome's own title draw and TitleTextRect/BeginRename below so all three can
+    /// never disagree about where the text is allowed to go.</summary>
+    private int TitleRowAvailableWidth(int contentWidth) =>
+        Math.Max(0, (ShowHeaderCloseButton ? GetHeaderCloseButtonRect(contentWidth).Left - 4 : contentWidth - 8) - 8);
+
     /// <summary>The exact rect the title text renders into, content-relative - shifted per
-    /// Style.TitleAlignment (Left/Center/Right) to match PaintChrome's own TextFormatFlags-driven
+    /// Style.TitleAlignment (Left/Center/Right) to match PaintChrome's own StringFormat-driven
     /// placement, so hit-testing (IsOverTitleRow) always agrees with what's actually drawn - a click
     /// past the end of a short/off-center title doesn't count as "on" it.</summary>
     private Rectangle TitleTextRect(int contentWidth)
     {
-        var available = Math.Max(0, contentWidth - 16);
+        var available = TitleRowAvailableWidth(contentWidth);
         var textWidth = Math.Min(available, TextRenderer.MeasureText(Title, TitleFont).Width);
         var x = Style.TitleAlignment switch
         {
@@ -1716,7 +1772,7 @@ internal abstract class LayeredWidgetForm : Form
         if (_renameBox is not null || !TitleVisible)
             return;
 
-        var maxWidth = Math.Max(0, GetContentSize().Width - 16);
+        var maxWidth = TitleRowAvailableWidth(GetContentSize().Width);
         var rect = ToWindow(new Rectangle(6, 3, maxWidth, Math.Max(0, TitleRowHeight - 6)));
         _renameBox = new EditBox(Handle, Title, ToScreen(rect), TitleFont);
         _renameBox.Commit += OnRenameCommit;
@@ -1766,6 +1822,59 @@ internal abstract class LayeredWidgetForm : Form
     }
 
     // ---- Settings button/dropdown ----
+
+    protected virtual int HeaderCloseButtonSize => 18;
+
+    /// <summary>Content-relative rect for the always-visible header close glyph (see
+    /// ShowHeaderCloseButton/PaintChrome's own close-glyph draw) - anchored to the title row's own
+    /// top-right corner regardless of Style.TitleAlignment, the same way a real window's close
+    /// button never moves with its title text. Unlike GetSettingsButtonRect below, lives inside the
+    /// title row itself rather than the reserved button band above/below it, since it needs to be
+    /// visible without the widget being "engaged" first.</summary>
+    protected Rectangle GetHeaderCloseButtonRect(int contentWidth) => new(
+        contentWidth - 6 - HeaderCloseButtonSize, (TitleRowHeight - HeaderCloseButtonSize) / 2,
+        HeaderCloseButtonSize, HeaderCloseButtonSize);
+
+    /// <summary>Whether contentPoint currently sits on the header close glyph - false whenever it
+    /// wouldn't even be painted (HideHeader on, or ShowHeaderCloseButton off), so callers don't need
+    /// to repeat that guard themselves.</summary>
+    protected bool IsOverHeaderCloseButton(Point contentPoint) =>
+        TitleVisible && ShowHeaderCloseButton && GetHeaderCloseButtonRect(GetContentSize().Width).Contains(contentPoint);
+
+    // Same arm-then-fire pattern as _armedCopySettingsButton/_armedExtraButtonIndex above.
+    private bool _headerCloseButtonArmed;
+
+    /// <summary>Arms the header close button if contentPoint lands on it - a subclass's own
+    /// OnMouseDown calls this, typically first (it's reachable even while ShowsButtons is false,
+    /// unlike every other chrome button this base owns).</summary>
+    protected bool TryArmHeaderCloseButton(Point contentPoint)
+    {
+        if (!IsOverHeaderCloseButton(contentPoint))
+            return false;
+        _headerCloseButtonArmed = true;
+        return true;
+    }
+
+    /// <summary>What clicking the header close button actually does - Close() by default, which is
+    /// correct for any widget whose own OnFormClosing already cancels-and-hides (WidgetManagerWidget/
+    /// LayoutLauncherWidget), or one like ReadmeWidget that genuinely wants a real close. FenceForm
+    /// overrides this instead of getting Close()'s default behavior: it has no OnFormClosing of its
+    /// own to intercept a raw Close() (a fence's lifecycle is delete-or-nothing, owned by
+    /// FenceManager.DeleteFence, not a per-fence hide - FenceManager doesn't even subscribe to
+    /// FormClosed on its own fence windows), so a plain Close() here would just destroy the window
+    /// while leaving FenceManager's own _models/_forms still holding it.</summary>
+    protected virtual void OnHeaderCloseButtonClick() => Close();
+
+    /// <summary>Fires the header close button if it was armed (see TryArmHeaderCloseButton) and the
+    /// mouse is still over it on release - a subclass's own OnMouseUp calls this.</summary>
+    protected void FireArmedHeaderCloseButton(Point contentPoint)
+    {
+        if (!_headerCloseButtonArmed)
+            return;
+        _headerCloseButtonArmed = false;
+        if (IsOverHeaderCloseButton(contentPoint))
+            OnHeaderCloseButtonClick();
+    }
 
     protected virtual int SettingsButtonWidth => 64;
     protected virtual int SettingsButtonHeight => 22;
@@ -1909,6 +2018,12 @@ internal abstract class LayeredWidgetForm : Form
                 kind = HoveredButtonKind.Extra;
                 index = extraIndex;
             }
+            // Not gated by ShowsButtons, unlike every check above - the header close button is meant
+            // to be reachable (and show hover feedback) without the widget being engaged first.
+            else if (IsOverHeaderCloseButton(point))
+            {
+                kind = HoveredButtonKind.HeaderClose;
+            }
             else if (TryGetContentButtonAt(size.Width, size.Height, point, out var contentIndex))
             {
                 kind = HoveredButtonKind.Content;
@@ -1947,6 +2062,21 @@ internal abstract class LayeredWidgetForm : Form
         base.Dispose(disposing);
     }
 
+    // Everything is painted at this many times the window's own pixel size, then downsampled back
+    // down under HighQualityBicubic before Present - plain GDI+ AntiAlias/AntiAliasGridFit still
+    // only has one sample per final pixel to work with, so small text stays visibly softer than
+    // ClearType would render it; supersampling gives the resampler several samples per final pixel
+    // instead, which sharpens glyph edges (and every other antialiased edge - icons, rounded
+    // corners) without touching ClearType's own premultiplied-alpha problems at all. Only safe now
+    // that every DrawText call reachable from PaintContent has been converted to GDI+'s own
+    // DrawString (see LayeredWidgetForm.PaintChrome's title and FenceForm.PaintItems' icon label) -
+    // GDI's TextRenderer.DrawText ignores Graphics.Transform entirely, so it rendered at 1x size in
+    // the wrong (unscaled) position once this was in place, before that conversion. Cost is
+    // quadratic in this value (buffer pixel count, plus the downsample pass) and every widget on
+    // this base repaints on hover/drag, not just on demand - watch drag responsiveness if this goes
+    // higher still.
+    private const float SupersampleScale = 3f;
+
     /// <summary>Builds this window's full appearance into an off-screen ARGB bitmap and pushes it via
     /// UpdateLayeredWindow. Called any time something visible changes (hover, drag, rename, content)
     /// rather than in response to WM_PAINT, since a layered window's content isn't repainted by
@@ -1966,10 +2096,14 @@ internal abstract class LayeredWidgetForm : Form
         if (contentWidth <= 0 || contentHeight <= 0)
             return;
 
-        using var buffer = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-        using (var g = Graphics.FromImage(buffer))
+        var scaledWidth = (int)Math.Ceiling(width * SupersampleScale);
+        var scaledHeight = (int)Math.Ceiling(height * SupersampleScale);
+
+        using var scaledBuffer = new Bitmap(scaledWidth, scaledHeight, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(scaledBuffer))
         {
             g.Clear(Color.Transparent);
+            g.ScaleTransform(SupersampleScale, SupersampleScale);
 
             // Needs a non-zero (if faint) alpha - Windows treats fully transparent (alpha 0) pixels
             // of a layered window as click-through, so a truly invisible margin couldn't receive the
@@ -1986,6 +2120,15 @@ internal abstract class LayeredWidgetForm : Form
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
 
             PaintContent(g, contentWidth, contentHeight);
+        }
+
+        using var buffer = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(buffer))
+        {
+            g.SmoothingMode = SmoothingMode.None;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.DrawImage(scaledBuffer, new Rectangle(0, 0, width, height));
         }
 
         LayeredWindowPresenter.Present(Handle, buffer, new Point(windowRect.Left, windowRect.Top), RenderOpacity.Value,

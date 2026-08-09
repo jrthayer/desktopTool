@@ -30,9 +30,10 @@ what a few theme colors are, what rows its own settings dropdown adds):
 - **The Settings button and its dropdown** — a band above or below the widget (flipped to whichever
   side actually fits the monitor) hosts a Settings button that opens a [`DropdownMenu`](DropdownMenu.cs)
   built from `BuildSettingsRows`. The base's own default rows (see `BuildBaseSettingsRows`) cover
-  every [`IWidgetStyle`](IWidgetStyle.cs) knob — title font size/alignment, Hide Title, Full Opacity
-  When Active, Header Border Mode, the color grid, Header Darkness/Opacity/Tint Strength, Corner
-  Radius, Margin — under a **Base** flyout; a subclass with its own extra settings (a fence's Hide
+  every [`IWidgetStyle`](IWidgetStyle.cs) knob — title font size/alignment, a header close button,
+  Hide Header, Full Opacity When Active, Header Border Mode, the color grid, Header Darkness/Opacity/
+  Tint Strength, Corner Radius, Margin — under a **Base** flyout; a subclass with its own extra
+  settings (a fence's Hide
   Shortcut Names/OCD Sizing) adds them via `BuildAdditionalSettingsRows`, shown in their own
   **Additional** flyout instead of having to rebuild the whole row list. See
   [Fences: Fence settings](../Features/Fences/README.md#fence-settings) for what every row actually
@@ -66,8 +67,9 @@ what a few theme colors are, what rows its own settings dropdown adds):
 theme derivation and settings-dropdown rows from, without re-declaring them. Every current widget
 model (`FenceModel`, `LayoutLauncherModel`, `WidgetManagerModel`) implements it the same way — by
 inheriting [`WidgetStyleModel`](WidgetStyleModel.cs), a plain abstract base that holds every one of
-those properties (plus `HideTitle`, which isn't technically part of `IWidgetStyle` but was still
-identical across all three) so a fourth widget wanting the same styling only has to inherit it
+those properties (plus `HideHeader`/`HeaderCloseButton`, which aren't technically part of
+`IWidgetStyle` but were still identical across all three) so a fourth widget wanting the same styling
+only has to inherit it
 instead of retyping a dozen properties again. Position/size/title/visibility stay out of that base
 on purpose — see its own class comment for why `FenceModel`'s shape there genuinely differs from the
 other two rather than just happening to be a different copy of the same thing.

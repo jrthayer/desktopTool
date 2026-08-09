@@ -172,6 +172,11 @@ internal sealed class CopySettingsGroupPicker : LayeredWidgetForm
             || TryGetExtraButtonAt(contentWidth, onLeft, contentPoint, out _)))
             return HTCLIENT;
 
+        // Not gated by ShowsButtons, unlike every check above - see IsOverHeaderCloseButton's own
+        // comment.
+        if (IsOverHeaderCloseButton(contentPoint))
+            return HTCLIENT;
+
         if (ShowsButtons)
         {
             var band = OuterMargin + ResizeMargin;
@@ -185,7 +190,7 @@ internal sealed class CopySettingsGroupPicker : LayeredWidgetForm
             return resizeCode;
         }
 
-        if (!_model.HideTitle && y - TopBand <= HeaderHeight)
+        if (!_model.HideHeader && y - TopBand <= HeaderHeight)
             return HTBORDER;
 
         return HTCLIENT;
@@ -201,6 +206,8 @@ internal sealed class CopySettingsGroupPicker : LayeredWidgetForm
         var contentWidth = GetContentSize().Width;
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
 
+        if (TryArmHeaderCloseButton(contentPoint))
+            return;
         if (ShowsButtons && GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint))
         {
             _settingsButtonArmed = true;
@@ -253,6 +260,8 @@ internal sealed class CopySettingsGroupPicker : LayeredWidgetForm
         var contentPoint = ToContent(e.Location);
         var contentWidth = GetContentSize().Width;
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
+
+        FireArmedHeaderCloseButton(contentPoint);
 
         if (_settingsButtonArmed)
         {
@@ -314,7 +323,7 @@ internal sealed class CopySettingsGroupPicker : LayeredWidgetForm
 
     protected override Rectangle GetListArea(int contentWidth, int contentHeight)
     {
-        var top = (_model.HideTitle ? 0 : HeaderHeight) + ListVerticalPadding;
+        var top = (_model.HideHeader ? 0 : HeaderHeight) + ListVerticalPadding;
         var height = Math.Max(ListRowHeight, contentHeight - top - ListVerticalPadding);
         return new Rectangle(ListHorizontalPadding, top, contentWidth - ListHorizontalPadding * 2, height);
     }
@@ -350,10 +359,16 @@ internal sealed class CopySettingsGroupPicker : LayeredWidgetForm
 
     protected override int TitleRowHeight => HeaderHeight;
 
-    protected override bool HideTitle
+    protected override bool HideHeader
     {
-        get => _model.HideTitle;
-        set { _model.HideTitle = value; Persist(); RenderAndPresent(); }
+        get => _model.HideHeader;
+        set { _model.HideHeader = value; Persist(); RenderAndPresent(); }
+    }
+
+    protected override bool ShowHeaderCloseButton
+    {
+        get => _model.HeaderCloseButton;
+        set { _model.HeaderCloseButton = value; Persist(); RenderAndPresent(); }
     }
 
     protected override void PersistStyle() => Persist();

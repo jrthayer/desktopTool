@@ -127,7 +127,7 @@ element in this app can reuse it the same way `FenceForm` does.
 Click a fence to activate it, then click **Settings** near the top of its
 title bar to open its settings menu. Two more buttons sit next to it: a
 duplicate-icon button that creates a new, empty fence with this one's
-settings (color, Hide Title/Labels, OCD sizing, size) copied over, and an
+settings (color, Hide Header/Labels, OCD sizing, size) copied over, and an
 **x** that deletes the fence (with a confirmation prompt) — its shortcuts
 aren't deleted, only removed from the fence; their real desktop icons are
 restored (see Desktop icon hiding above).
@@ -140,7 +140,14 @@ rather than per-widget:
 
 - **Header > Font Size / Align** — the title text's own point size (7-14pt)
   and how it sits in its row (Left/Center/Right).
-- **Hide Title** — hides the title bar entirely, reclaiming that space for
+- **Header > Close Button** — off by default. When on, an always-visible
+  "×" glyph sits in the title row itself, without needing to right-click or
+  click the title to activate it first the way Settings does. On a fence
+  specifically it triggers the same confirmed delete as the "×" Delete
+  button above (a fence has no per-fence hide state of its own); on the
+  Layout Launcher it hides the widget the same way its own Settings-menu
+  Close does.
+- **Hide Header** — hides the title bar entirely, reclaiming that space for
   the body. The widget can still be moved via its outer margin.
 - **Full Opacity When Active** — off by default. When on, the widget
   renders fully opaque while hovered, while being dragged or resized, or
