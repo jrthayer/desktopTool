@@ -170,6 +170,17 @@ internal sealed class FenceForm : LayeredWidgetForm
 
     public Guid FenceId => _model.Id;
 
+    /// <summary>Runs OCD Fence Sizing's own fit-to-content once, immediately - same call
+    /// ToggleOcdFenceSizing itself makes when turning the setting on, but for a fence created with
+    /// OcdFenceSizing already true in its model (see FenceManager.AddRecycleBin), which otherwise
+    /// wouldn't get tidied up until the next manual resize (see OnDragEnd). A no-op if the model
+    /// doesn't actually have it on.</summary>
+    public void ApplyOcdSizingIfEnabled()
+    {
+        if (_model.OcdFenceSizing)
+            FormatDimensions(adjustWidth: true, adjustHeight: true);
+    }
+
     /// <summary>Which model LayeredWidgetForm's own theme derivation (ThemedBody/Accent/etc) and
     /// generic Settings-dropdown rows (Hide Title, Full Opacity When Active, the color grid/sliders)
     /// read from - FenceModel already implements IWidgetStyle.</summary>

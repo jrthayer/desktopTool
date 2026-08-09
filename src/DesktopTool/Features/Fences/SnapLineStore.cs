@@ -14,9 +14,14 @@ public sealed class SnapLineSettings
 
     /// <summary>Off drops every custom snap line (seeded defaults included - they're plain entries
     /// in Lines, not distinguished from a user-drawn one) from drag candidates app-wide, while
-    /// fence-to-fence edge snapping keeps working untouched - see SnapLineManager.Enabled/SetEnabled.
+    /// widget-to-widget edge snapping keeps working untouched - see SnapLineManager.Enabled/SetEnabled.
     /// Editing lines via Manage Snap Lines... still works regardless of this.</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>Off drops every other live widget's edges (see LayeredWidgetForm.GetOtherWidgetEdges)
+    /// from drag/resize candidates app-wide, while custom snap lines above keep working untouched -
+    /// see SnapLineManager.WidgetEdgesEnabled/SetWidgetEdgesEnabled.</summary>
+    public bool WidgetEdgesEnabled { get; set; } = true;
 }
 
 public sealed class SnapLineStore

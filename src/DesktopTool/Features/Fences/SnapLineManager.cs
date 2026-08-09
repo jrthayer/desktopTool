@@ -29,6 +29,11 @@ public sealed class SnapLineManager : IDisposable
     /// re-deriving it.</summary>
     public bool Enabled { get; private set; }
 
+    /// <summary>Off drops every other live widget's edges from drag/resize candidates app-wide - see
+    /// LayeredWidgetForm.GetOtherWidgetEdges, which is the sole place that reads this. Loaded once
+    /// here, same as Enabled above.</summary>
+    public bool WidgetEdgesEnabled { get; private set; }
+
     public event Action? LinesChanged;
 
     public SnapLineManager()
@@ -37,6 +42,7 @@ public sealed class SnapLineManager : IDisposable
         _lines = settings.Lines;
         _seededMonitors = settings.SeededMonitors;
         Enabled = settings.Enabled;
+        WidgetEdgesEnabled = settings.WidgetEdgesEnabled;
         SeedDefaultEdgeLinesForNewMonitors();
     }
 
@@ -47,6 +53,15 @@ public sealed class SnapLineManager : IDisposable
         if (enabled == Enabled)
             return;
         Enabled = enabled;
+        Save();
+    }
+
+    /// <summary>Widget Manager's own Widget Snapping switch - same shape as SetEnabled above.</summary>
+    public void SetWidgetEdgesEnabled(bool enabled)
+    {
+        if (enabled == WidgetEdgesEnabled)
+            return;
+        WidgetEdgesEnabled = enabled;
         Save();
     }
 
@@ -365,5 +380,5 @@ public sealed class SnapLineManager : IDisposable
         return (vertical, horizontal);
     }
 
-    private void Save() => _store.Save(new SnapLineSettings { Lines = _lines, SeededMonitors = _seededMonitors, Enabled = Enabled });
+    private void Save() => _store.Save(new SnapLineSettings { Lines = _lines, SeededMonitors = _seededMonitors, Enabled = Enabled, WidgetEdgesEnabled = WidgetEdgesEnabled });
 }

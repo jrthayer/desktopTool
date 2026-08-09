@@ -225,21 +225,53 @@ public sealed class FenceManager : IDisposable
 
     /// <summary>Creates a new dedicated fence (mirroring CreateFence) holding just the single
     /// synthetic Recycle Bin item, and hides the real desktop icon (see RecycleBinIconManager) so it
-    /// doesn't sit doubled-up. Triggered from the tray menu rather than any particular fence's own
-    /// settings, so there's no existing fence to target - a fresh one is the least ambiguous place
-    /// to put it; the item can still be dragged into a different fence afterward like any other.
-    /// No-ops if one already exists anywhere - see HasRecycleBin.</summary>
+    /// doesn't sit doubled-up. Triggered from Widget Manager's own Fence Trash Can switch rather than
+    /// any particular fence's own settings, so there's no existing fence to target - a fresh one is
+    /// the least ambiguous place to put it; the item can still be dragged into a different fence
+    /// afterward like any other. No-ops if one already exists anywhere - see HasRecycleBin.
+    ///
+    /// Starts with no header (HideTitle), no label under the icon (HideLabels), and OCD Fence Sizing
+    /// on, then fires ApplyOcdSizingIfEnabled once right after showing it - otherwise OCD Fence
+    /// Sizing wouldn't actually tidy the bounds until the next manual resize (see FenceForm.OnDragEnd),
+    /// leaving this brand-new fence sized like an ordinary one instead of wrapped tight around the
+    /// single icon.</summary>
     public void AddRecycleBin()
     {
         if (HasRecycleBin)
             return;
 
-        var model = new FenceModel { Name = "Recycle Bin", Bounds = NextDefaultBounds() };
+        var model = new FenceModel
+        {
+            Name = "Recycle Bin",
+            Bounds = NextDefaultBounds(),
+            HideTitle = true,
+            HideLabels = true,
+            OcdFenceSizing = true,
+        };
         model.Files.Add(new FenceItem { Path = RecycleBinPath, DisplayName = "Recycle Bin", IsRecycleBin = true });
         _models.Add(model);
-        ShowFence(model);
+        var form = ShowFence(model);
+        form.ApplyOcdSizingIfEnabled();
         RecycleBinIconManager.SetHidden(true);
         Save();
+    }
+
+    /// <summary>Reverses AddRecycleBin - restores the real desktop icon's own visibility (see
+    /// RemoveFile's own IsRecycleBin branch) and, since the fence this widget created for it holds
+    /// nothing else in the ordinary case, deletes that now-empty fence outright rather than leaving a
+    /// titled, contentless husk behind. If the user has since dragged other items into it, DeleteFence
+    /// still isn't called - that fence has become a real one worth keeping, so only the trash item
+    /// itself goes. No-ops if no Recycle Bin item exists anywhere - see HasRecycleBin.</summary>
+    public void RemoveRecycleBin()
+    {
+        var model = _models.Find(m => m.Files.Any(f => f.IsRecycleBin));
+        var item = model?.Files.Find(f => f.IsRecycleBin);
+        if (model is null || item is null)
+            return;
+
+        RemoveFile(model.Id, item.Path);
+        if (model.Files.Count == 0)
+            DeleteFence(model.Id);
     }
 
     /// <summary>Sends files that were dropped directly onto a fence's trash cell straight to the
@@ -425,12 +457,13 @@ public sealed class FenceManager : IDisposable
             DefaultFenceSize.Width, DefaultFenceSize.Height);
     }
 
-    private void ShowFence(FenceModel model)
+    private FenceForm ShowFence(FenceModel model)
     {
         var form = new FenceForm(model, this, _anchorStrategy);
         _forms[model.Id] = form;
         form.Show();
         form.Reanchor();
+        return form;
     }
 
     private bool IsReferencedByAnyFence(string path) => _models.Any(m => m.Files.Any(f => f.Path == path));

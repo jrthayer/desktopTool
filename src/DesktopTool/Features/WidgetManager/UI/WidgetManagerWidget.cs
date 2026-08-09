@@ -10,12 +10,13 @@ namespace DesktopTool.Features.WidgetManager.UI;
 /// <summary>
 /// "Widget Manager" widget - a third, independent proof that LayeredWidgetForm's own chrome
 /// (move/resize/snap/rename/settings/theme/list) works for something that isn't a Fence or the
-/// Layout Launcher. Lists the app's three toggleable widgets - Fences, Snap Lines, Layout Launcher -
-/// each as a fixed row (never added to/removed from, unlike Layout Launcher's own saved-profile
-/// list) with an on/off switch plus a row-specific action button, so all three can be reached
-/// without opening the tray menu. Everything not genuinely specific to this widget (theme
-/// derivation, the Settings dropdown's default rows, button/border/title/list painting) is
-/// LayeredWidgetForm's own - see its own class comment.
+/// Layout Launcher. Lists the app's toggleable widgets/switches - Fences, Layout Launcher, Snap
+/// Lines, Widget Snapping, Fence Trash Can - each as a fixed row (never added to/removed from,
+/// unlike Layout Launcher's own saved-profile list) with an on/off switch and, for the three that
+/// have somewhere to go, a row-specific action button, so all of them can be reached without
+/// opening the tray menu. Everything not genuinely specific to this widget (theme derivation, the
+/// Settings dropdown's default rows, button/border/title/list painting) is LayeredWidgetForm's
+/// own - see its own class comment.
 /// </summary>
 internal sealed class WidgetManagerWidget : LayeredWidgetForm
 {
@@ -27,14 +28,14 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private const int ButtonBandOverhang = 19;
     private const int TopMarginWithButtons = OuterMarginPx + ButtonBandOverhang;
 
-    private const int RowCountFixed = 3;
+    private const int RowCountFixed = 5;
     private const int ListVerticalPadding = 8;
     private const int ListHorizontalPadding = 10;
 
     // Used to seed CreateParams/GetCurrentBody before the widget has ever been resized (see
     // WidgetManagerModel.Height's own "null until moved/resized once" comment) - unlike Layout
     // Launcher's own DefaultBodyHeight (a guess, since its row count varies), this widget's row
-    // count is fixed, so the default is the exact height that fits all three rows plus padding, not
+    // count is fixed, so the default is the exact height that fits all five rows plus padding, not
     // an arbitrary constant.
     private static int DefaultBodyHeight => HeaderHeight + ListVerticalPadding * 2 + RowCountFixed * ListRowHeightConst;
     private const int ListRowHeightConst = 30;
@@ -47,18 +48,21 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private bool _settingsButtonArmed;
 
     // Cog for an "open an editor" action (Snap Lines/Layout Launcher), Plus for an "add one more"
-    // action (Fences) - see PaintCogGlyph/PaintPlusGlyph.
-    private enum RowButtonIcon { Plus, Cog }
+    // action (Fences), None for a row with no editor of its own (Widget Snapping - a plain on/off
+    // with nowhere to go) - see PaintCogGlyph/PaintPlusGlyph/PaintRowButton.
+    private enum RowButtonIcon { Plus, Cog, None }
 
     private readonly record struct WidgetRow(string Label, string ButtonTooltip, RowButtonIcon ButtonIcon);
 
-    // Snap Lines last - IsRowOn/ToggleRow/FireRowButtonAction's own index switches below must stay
-    // in this same order.
+    // Fence Trash Can last - IsRowOn/ToggleRow/FireRowButtonAction's own index switches below must
+    // stay in this same order.
     private static readonly WidgetRow[] Rows =
     {
         new("Fences", "Add Fence", RowButtonIcon.Plus),
         new("Layout Launcher", "Edit Layouts", RowButtonIcon.Cog),
         new("Snap Lines", "Edit Snap Lines", RowButtonIcon.Cog),
+        new("Widget Snapping", string.Empty, RowButtonIcon.None),
+        new("Fence Trash Can", string.Empty, RowButtonIcon.None),
     };
 
     // Row click handling - clicking a row's own switch flips that widget's on/off state; its
@@ -78,7 +82,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     // Forms.ToolTip flashes its default look for a frame" reason - see that class's own comment.
     private readonly PaintedTooltip _rowTooltip = new();
 
-    /// <summary>Close (× - hides, same as Layout Launcher's own "x") - LayeredWidgetForm's own
+    /// <summary>"?" (opens the Readme window) chained right off Settings/Copy Settings, then Close
+    /// (× - hides, same as Layout Launcher's own "x") at the outer edge - LayeredWidgetForm's own
     /// ChromeButton mechanism instead of hand-rolled rect-chaining/paint/hit-test/arm-fire code.</summary>
     protected override IReadOnlyList<ChromeButton> ExtraButtons { get; }
 
@@ -86,6 +91,11 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// TrayApplicationContext open the same Manage Layouts editor its own tray item does, without
     /// this widget needing a LayoutManager/LayoutEditorForm reference of its own.</summary>
     public event EventHandler? EditLayoutsRequested;
+
+    /// <summary>Fired when the "?" button is clicked - lets TrayApplicationContext open (or
+    /// re-activate) the Readme window the same "create once, reuse" way as OpenLayoutEditor, without
+    /// this widget needing a ReadmeForm reference of its own.</summary>
+    public event EventHandler? HelpRequested;
 
     protected override int OuterMargin => OuterMarginPx;
     protected override int TopBand => ButtonRowAtBottom ? 0 : TopMarginWithButtons;
@@ -105,6 +115,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
         ExtraButtons = new List<ChromeButton>
         {
+            new("?", 22, () => HelpRequested?.Invoke(this, EventArgs.Empty)),
             new("×", 22, HideAndPersist),
         };
 
@@ -555,11 +566,12 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     }
 
     /// <summary>The row's own label area - from the row's own left padding up to where its action
-    /// button starts.</summary>
-    private static Rectangle GetRowLabelRect(Rectangle rowRect)
+    /// button starts, or (hasButton false, e.g. Widget Snapping) straight up to the switch itself,
+    /// since there's no button rect to stop at.</summary>
+    private static Rectangle GetRowLabelRect(Rectangle rowRect, bool hasButton)
     {
-        var buttonRect = GetRowButtonRect(rowRect);
-        var width = Math.Max(0, buttonRect.X - 8 - rowRect.X - 8);
+        var stopX = hasButton ? GetRowButtonRect(rowRect).X : GetRowSwitchRect(rowRect).X;
+        var width = Math.Max(0, stopX - 8 - rowRect.X - 8);
         return new Rectangle(rowRect.X + 8, rowRect.Y, width, rowRect.Height);
     }
 
@@ -595,7 +607,9 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
     /// <summary>What clicking contentPoint would do right now - RowTarget.None if it doesn't land on
     /// a row's switch or action button at all (unlike Layout Launcher's rows, clicking a bare label
-    /// here does nothing - there's no "run" action for a row that isn't a saved layout).</summary>
+    /// here does nothing - there's no "run" action for a row that isn't a saved layout). A row whose
+    /// own ButtonIcon is None (Widget Snapping) has no button rect to test at all - its label area
+    /// already reaches the switch (see GetRowLabelRect), so there's no gap to accidentally hit.</summary>
     private (RowTarget Target, int Index) GetRowTargetAt(Point contentPoint)
     {
         if (!TryGetRowAt(contentPoint, out var index, out var rowRect))
@@ -603,19 +617,22 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
         if (GetRowSwitchRect(rowRect).Contains(contentPoint))
             return (RowTarget.Switch, index);
-        if (GetRowButtonRect(rowRect).Contains(contentPoint))
+        if (Rows[index].ButtonIcon != RowButtonIcon.None && GetRowButtonRect(rowRect).Contains(contentPoint))
             return (RowTarget.Button, index);
         return (RowTarget.None, -1);
     }
 
     /// <summary>Whether row index's widget is currently "on" - Fences: at least one fence visible
     /// (see FenceManager.AnyVisible); Layout Launcher: the widget's own Visible; Snap Lines:
-    /// SnapLineManager.Enabled. Same row order as Rows above.</summary>
+    /// SnapLineManager.Enabled; Widget Snapping: SnapLineManager.WidgetEdgesEnabled; Fence Trash
+    /// Can: FenceManager.HasRecycleBin. Same row order as Rows above.</summary>
     private bool IsRowOn(int index) => index switch
     {
         0 => Fences.AnyVisible,
         1 => _layoutLauncher.Visible,
         2 => Fences.SnapLines.Enabled,
+        3 => Fences.SnapLines.WidgetEdgesEnabled,
+        4 => Fences.HasRecycleBin,
         _ => false,
     };
 
@@ -626,6 +643,10 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case 0: Fences.SetAllVisible(!Fences.AnyVisible); break;
             case 1: _layoutLauncher.ToggleVisible(); break;
             case 2: Fences.SnapLines.SetEnabled(!Fences.SnapLines.Enabled); break;
+            case 3: Fences.SnapLines.SetWidgetEdgesEnabled(!Fences.SnapLines.WidgetEdgesEnabled); break;
+            case 4:
+                if (Fences.HasRecycleBin) Fences.RemoveRecycleBin(); else Fences.AddRecycleBin();
+                break;
         }
     }
 
@@ -636,6 +657,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case 0: Fences.CreateFence(); break;
             case 1: EditLayoutsRequested?.Invoke(this, EventArgs.Empty); break;
             case 2: Fences.SnapLines.EnterEditMode(); break;
+            // 3 (Widget Snapping) and 4 (Fence Trash Can) have no action button - RowButtonIcon.
+            // None, never hit-testable.
         }
     }
 
@@ -706,14 +729,18 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         using (var rowFill = new SolidBrush(rowBackground))
             g.FillRectangle(rowFill, rowRect);
 
+        var icon = Rows[index].ButtonIcon;
+        var hasButton = icon != RowButtonIcon.None;
+
         var previousTextHint = g.TextRenderingHint;
         g.TextRenderingHint = TextRenderingHint.AntiAlias;
         using (var textBrush = new SolidBrush(Color.WhiteSmoke))
         using (var textFormat = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString(Rows[index].Label, Font, textBrush, GetRowLabelRect(rowRect), textFormat);
+            g.DrawString(Rows[index].Label, Font, textBrush, GetRowLabelRect(rowRect, hasButton), textFormat);
         g.TextRenderingHint = previousTextHint;
 
-        PaintRowButton(g, GetRowButtonRect(rowRect), Rows[index].ButtonIcon);
+        if (hasButton)
+            PaintRowButton(g, GetRowButtonRect(rowRect), icon);
         PaintRowSwitch(g, GetRowSwitchRect(rowRect), IsRowOn(index), rowBackground);
     }
 

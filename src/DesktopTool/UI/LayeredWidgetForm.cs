@@ -1536,9 +1536,15 @@ internal abstract class LayeredWidgetForm : Form
     /// whichever of the two is actually closest. Not filtered by Visible - a hidden widget ("Show/Hide
     /// All") is still a valid snap target the same way FenceForm's own predecessor of this method
     /// never bothered filtering for that either. GetCurrentBody() is read fresh per candidate (not
-    /// cached anywhere) so a widget still mid-drag itself contributes its own latest position.</summary>
+    /// cached anywhere) so a widget still mid-drag itself contributes its own latest position. Empty
+    /// outright when Widget Manager's own Widget Snapping switch is off (Fences.SnapLines.
+    /// WidgetEdgesEnabled) - the sole gate, so every caller (ComputeMovedBody/ComputeResizedBody/
+    /// BeginSnapDrag) picks that up for free.</summary>
     private (IReadOnlyList<int> Vertical, IReadOnlyList<int> Horizontal) GetOtherWidgetEdges()
     {
+        if (!Fences.SnapLines.WidgetEdgesEnabled)
+            return (Array.Empty<int>(), Array.Empty<int>());
+
         var margin = SnapMargin;
         var vertical = new List<int>();
         var horizontal = new List<int>();

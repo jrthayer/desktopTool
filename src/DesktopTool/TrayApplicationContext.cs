@@ -1,6 +1,7 @@
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.Layouts;
 using DesktopTool.Features.Layouts.UI;
+using DesktopTool.Features.Readme.UI;
 using DesktopTool.Features.WidgetManager;
 using DesktopTool.Features.WidgetManager.UI;
 using DesktopTool.UI;
@@ -19,6 +20,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
     // second copy, the same "don't duplicate, just surface the existing one" idea FenceManager's
     // own SnapLines edit mode already follows for its overlay/panel pair.
     private LayoutEditorForm? _layoutEditor;
+
+    // Same "create once, reuse/activate the existing one" idea as _layoutEditor above - opened via
+    // Widget Manager's own "?" button (see WidgetManagerWidget.HelpRequested/OpenReadme). Unlike
+    // _layoutLauncher/_widgetManager below, never shown at startup and fully disposed on close
+    // rather than hidden-and-reused - see ReadmeWidget's own class comment for why.
+    private ReadmeWidget? _readmeForm;
 
     // Unlike _layoutEditor, created once up front (see the constructor) and never recreated for the
     // rest of the process - this is meant to be a persistent desktop element like a Fence, not a
@@ -45,6 +52,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         var widgetManagerModel = _widgetManagerStore.Load();
         _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, widgetManagerModel, _widgetManagerStore);
         _widgetManager.EditLayoutsRequested += (_, _) => OpenLayoutEditor(null);
+        _widgetManager.HelpRequested += (_, _) => OpenReadme();
 
         var menu = new ContextMenuStrip
         {
@@ -61,8 +69,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ShowCheckMargin = true,
         };
         // At the top since it's the entry point into everything else this menu used to list
-        // directly (New Fence/Manage Snap Lines.../Layout Launcher toggle all moved onto Widget
-        // Manager's own rows instead - see WidgetManagerWidget). CheckOnClick would fight
+        // directly (New Fence/Manage Snap Lines.../Layout Launcher toggle/Add Recycle Bin all moved
+        // onto Widget Manager's own rows instead - see WidgetManagerWidget). CheckOnClick would fight
         // ToggleVisible's own idea of the current state (it flips Checked itself before the Click
         // handler runs, same as startupItem/hiddenFilesItem below already avoid) - toggled and
         // reflected explicitly instead, still "read fresh every open" like those.
@@ -87,13 +95,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         hiddenFilesItem.Click += OnToggleHiddenFiles;
         menu.Opening += (_, _) => hiddenFilesItem.Checked = HiddenFilesManager.IsEnabled;
         menu.Items.Add(hiddenFilesItem);
-        menu.Items.Add(new ToolStripSeparator());
-        // Only one Recycle Bin item is allowed across every fence at once (see
-        // FenceManager.HasRecycleBin) - hidden entirely once one exists anywhere, re-checked fresh
-        // on every open same as the toggles above.
-        var addRecycleBinItem = new ToolStripMenuItem("Add Recycle Bin", null, OnAddRecycleBin);
-        menu.Opening += (_, _) => addRecycleBinItem.Visible = !_fenceManager.HasRecycleBin;
-        menu.Items.Add(addRecycleBinItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, OnExit);
 
@@ -131,9 +132,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void OnToggleHiddenFiles(object? sender, EventArgs e) =>
         HiddenFilesManager.SetEnabled(((ToolStripMenuItem)sender!).Checked);
 
-    private void OnAddRecycleBin(object? sender, EventArgs e) =>
-        _fenceManager.AddRecycleBin();
-
     /// <summary>The only current subscriber to LayoutManager.LaunchFailed - a balloon tip is enough
     /// for something that isn't blocking (the rest of the layout still ran), and doesn't need its own
     /// dialog to dismiss. Named programs, not just a generic "something failed" - see WindowPlacer.
@@ -161,6 +159,19 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _layoutEditor.Show();
     }
 
+    private void OpenReadme()
+    {
+        if (_readmeForm is { IsDisposed: false })
+        {
+            _readmeForm.Activate();
+            return;
+        }
+
+        _readmeForm = new ReadmeWidget(_fenceManager);
+        _readmeForm.FormClosed += (_, _) => _readmeForm = null;
+        _readmeForm.Show();
+    }
+
     private void OnShowHideAll(object? sender, EventArgs e) =>
         _fenceManager.SetAllVisible(!_fenceManager.AnyVisible);
 
@@ -169,6 +180,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _layoutEditor?.Dispose();
+        _readmeForm?.Dispose();
         _layoutLauncher.Shutdown();
         _widgetManager.Shutdown();
         _fenceManager.Dispose();
