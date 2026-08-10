@@ -103,15 +103,16 @@ internal abstract class LayeredWidgetForm : Form
     // translucent-white hover tint a Fence's own icon-grid cells use (see PaintButtonHoverTint),
     // just for Settings/ChromeButton/ContentButton instead. Recomputed on every OnMouseMove/
     // OnMouseLeave (see UpdateButtonHover), repainting only on an actual change.
-    private enum HoveredButtonKind { None, Settings, CopySettings, Extra, Content, HeaderClose }
+    private enum HoveredButtonKind { None, Settings, Extra, Content, HeaderClose }
     private HoveredButtonKind _hoveredButtonKind = HoveredButtonKind.None;
     private int _hoveredButtonIndex = -1;
 
-    // "Copy Settings To" is icon-only (a hand-drawn paint-brush glyph, no text label - see
-    // PaintCopySettingsButton), so it needs the same tooltip affordance LayoutLauncherWidget/
-    // WidgetManagerWidget's own icon-only row buttons already needed - shown/hidden from the same
-    // UpdateButtonHover pass that already drives every base button's hover tint.
-    private readonly PaintedTooltip _copySettingsTooltip = new();
+    // "Copy Settings To" is icon-only (a hand-drawn eyedropper glyph, no text label - see
+    // PaintEyedropperGlyph), so it needs its own tooltip the same way an ExtraButtons' own
+    // ChromeButton.Tooltip does - shared between the two rather than a second copy of it, since only
+    // one of them can ever be hovered at once. Shown/hidden from the same UpdateButtonHover pass that
+    // already drives every base button's hover tint.
+    private readonly PaintedTooltip _chromeButtonTooltip = new();
 
     // Fixed anchor a drag/resize measures against every tick, instead of trusting the OS's own
     // incrementally-proposed rect (drift/stickiness otherwise) - captured once, from GetCurrentBody,
@@ -562,15 +563,18 @@ internal abstract class LayeredWidgetForm : Form
     {
     }
 
-    /// <summary>Rows specific to a subclass's own feature - shown in a flyout labeled "Additional"
-    /// below "Base" (see BuildSettingsRows). Kept separate from the shared rows in BuildBaseSettingsRows
-    /// rather than folded into one combined list, so a subclass with nothing of its own (Layout
-    /// Launcher, so far) doesn't get a pointless empty flyout, and so what's genuinely feature-specific
-    /// (a Fence's own Hide Shortcut Names/OCD Sizing) never has to duplicate the shared rows around it
-    /// just to add a couple more. Null or empty means no flyout. Command ids used here are the
-    /// subclass's own (positive, in FenceForm's case) - route them in HandleSettingsCommand the same
-    /// way, falling through to base.HandleSettingsCommand for anything not recognized (the shared ids
-    /// these additional rows didn't add).</summary>
+    /// <summary>Rows specific to a subclass's own feature - listed directly below "Base" in the
+    /// top-level dropdown now (see BuildSettingsRows), not nested in their own "Additional" flyout
+    /// the way they used to be. Still kept as their own distinct method rather than folded into
+    /// BuildBaseSettingsRows, deliberately - BuildSettingsRows is the ONLY place that reads this, so
+    /// putting the "Additional" flyout back later (for a subclass that ends up with enough of its own
+    /// settings that a flat inline list stops reading well - a lot of unique settings, say) is a
+    /// one-line change there (wrap the AddRange back into a Submenu row) rather than a rewrite here.
+    /// A subclass with nothing of its own (Layout Launcher, so far) still contributes nothing extra
+    /// either way. Null or empty means nothing to add. Command ids used here are the subclass's own
+    /// (positive, in FenceForm's case) - route them in HandleSettingsCommand the same way, falling
+    /// through to base.HandleSettingsCommand for anything not recognized (the shared ids these
+    /// additional rows didn't add).</summary>
     protected virtual IReadOnlyList<DropdownMenu.Row>? BuildAdditionalSettingsRows() => null;
 
     /// <summary>Whether the "Light Border" row below is offered at all - true by default. A
@@ -727,20 +731,59 @@ internal abstract class LayeredWidgetForm : Form
         return rows;
     }
 
-    /// <summary>The Settings dropdown's default row list - just two flyouts: "Base" (see
-    /// BuildBaseSettingsRows, always present) and "Additional" (see BuildAdditionalSettingsRows, only
-    /// when a subclass has something of its own to add). Virtual, not sealed, in case a subclass ever
+    /// <summary>The Settings dropdown's default row list - whichever ExtraButtons don't currently fit
+    /// on the bar (see BuildOverflowButtonRows/VisibleExtraButtonCount), then "Base" (see
+    /// BuildBaseSettingsRows, always present, still its own flyout), then a subclass's own additional
+    /// rows (see BuildAdditionalSettingsRows) listed directly inline rather than tucked into a second
+    /// "Additional" flyout the way they used to be - a separator marks where the relocated button row
+    /// ends and Base's own opener row begins, and another marks where Base ends and a subclass's own
+    /// rows begin, since there's no flyout boundary doing either job anymore. BuildAdditionalSettingsRows
+    /// is still its own distinct method (not folded into BuildBaseSettingsRows) specifically so this
+    /// is a one-line revert (wrap the AddRange below back into a Submenu row) if a subclass with a lot
+    /// of unique settings ever wants its own flyout back. Virtual, not sealed, in case a subclass ever
     /// needs a genuinely different shape rather than just extra rows - but BuildAdditionalSettingsRows
     /// should cover that need first.</summary>
     protected virtual List<DropdownMenu.Row> BuildSettingsRows()
     {
-        var rows = new List<DropdownMenu.Row>
-        {
-            new(0, "Base", Submenu: BuildBaseSettingsRows()),
-        };
+        var rows = new List<DropdownMenu.Row>();
+        var overflowButtons = BuildOverflowButtonRows().ToList();
+        rows.AddRange(overflowButtons);
+        if (overflowButtons.Count > 0)
+            rows.Add(new DropdownMenu.Row(0, string.Empty, IsSeparator: true));
+        rows.Add(new(0, "Base", Submenu: BuildBaseSettingsRows()));
         if (BuildAdditionalSettingsRows() is { Count: > 0 } additional)
-            rows.Add(new DropdownMenu.Row(0, "Additional", Submenu: additional));
+        {
+            rows.Add(new DropdownMenu.Row(0, string.Empty, IsSeparator: true));
+            rows.AddRange(additional);
+        }
         return rows;
+    }
+
+    /// <summary>One DropdownMenu.Row(IsButtonRow: true) for each AllBarButtons entry (Copy Settings
+    /// included) that doesn't currently fit on the bar (see VisibleExtraButtonCount) - empty once
+    /// every button fits. Same icon each one uses on the bar (custom PaintGlyph, or a plain centered
+    /// Label when none was given, matching PaintExtraButtons' own rendering), just relocated to the
+    /// top of the Settings dropdown instead (see BuildSettingsRows). Each button's own OnClick fires
+    /// directly (see Row.ButtonOnClick) rather than through a synthetic command id - ChromeButton.
+    /// OnClick is already a plain Action, so there's nothing for HandleSettingsCommand to dispatch
+    /// here.</summary>
+    private IEnumerable<DropdownMenu.Row> BuildOverflowButtonRows() =>
+        AllBarButtons.Skip(VisibleExtraButtonCount(GetContentSize().Width))
+            .Select(button => new DropdownMenu.Row(0, string.Empty, IsButtonRow: true,
+                ButtonGlyph: button.PaintGlyph ?? ((g, rect) => DrawDefaultButtonGlyph(g, rect, button.Label)),
+                ButtonOnClick: button.OnClick, Tooltip: button.EffectiveTooltip));
+
+    /// <summary>The same plain-centered-text rendering PaintExtraButtons itself falls back to for a
+    /// ChromeButton with no custom PaintGlyph - shared so a relocated button reads identically
+    /// wherever it currently is.</summary>
+    private void DrawDefaultButtonGlyph(Graphics g, Rectangle rect, string label)
+    {
+        var previousTextHint = g.TextRenderingHint;
+        g.TextRenderingHint = TextRenderingHint.AntiAlias;
+        using (var textBrush = new SolidBrush(Color.WhiteSmoke))
+        using (var textFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            g.DrawString(label, Font, textBrush, rect, textFormat);
+        g.TextRenderingHint = previousTextHint;
     }
 
     /// <summary>Dispatches BuildSettingsRows' own default row ids - a subclass with its own additional
@@ -908,7 +951,8 @@ internal abstract class LayeredWidgetForm : Form
         if (ShowsButtons)
         {
             PaintSettingsButton(g, contentWidth);
-            PaintCopySettingsButton(g, contentWidth);
+            // Copy Settings is AllBarButtons[0] now - PaintExtraButtons paints it right along with
+            // every ExtraButtons entry, so there's no separate call for it here anymore.
             PaintExtraButtons(g, contentWidth);
         }
 
@@ -917,7 +961,7 @@ internal abstract class LayeredWidgetForm : Form
 
         // Last, so it sits on top of everything else this method just painted - same reasoning as
         // every other row/button tooltip in this app.
-        _copySettingsTooltip.Paint(g, Font, SettingsMenuTooltipColor, ToWindow(new Rectangle(0, 0, contentWidth, contentHeight)),
+        _chromeButtonTooltip.Paint(g, Font, SettingsMenuTooltipColor, ToWindow(new Rectangle(0, 0, contentWidth, contentHeight)),
             Style.HeaderBorderMode ? ThemedTitle : null);
     }
 
@@ -952,33 +996,14 @@ internal abstract class LayeredWidgetForm : Form
         g.TextRenderingHint = previousTextHint;
     }
 
-    private void PaintCopySettingsButton(Graphics g, int contentWidth)
-    {
-        var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
-        var buttonRect = ToWindow(GetCopySettingsButtonRect(contentWidth, onLeft));
-
-        // Same opaque-backing reasoning as PaintSettingsButton's own comment.
-        using (var buttonPath = RoundedRectPath.Full(buttonRect, 6))
-        {
-            using (var buttonFill = new SolidBrush(ThemedField))
-                g.FillPath(buttonFill, buttonPath);
-            PaintHeaderBorderModeOutline(g, buttonPath);
-        }
-
-        if (_hoveredButtonKind == HoveredButtonKind.CopySettings)
-            PaintButtonHoverTint(g, buttonRect);
-
-        PaintCopyIconGlyph(g, buttonRect);
-    }
-
-    /// <summary>"Copy Settings To" - the classic two-overlapping-squares "duplicate" glyph, same
-    /// hand-drawn approach as LayoutLauncherWidget's own row-level PaintCopyGlyph (no icon asset
-    /// library in this app - see WarningIcon's own comment). The front square's corner is punched
-    /// out of the back square first using ThemedField (this button's own fill - see
-    /// PaintCopySettingsButton just above) so it reads as sitting on top instead of two crossing
-    /// outlines. Icon-only, no text label - the button is too small for "Copy Settings To" to fit,
-    /// hence the tooltip (see _copySettingsTooltip).</summary>
-    private void PaintCopyIconGlyph(Graphics g, Rectangle rect)
+    /// <summary>The classic two-overlapping-squares "duplicate" glyph, same hand-drawn approach as
+    /// LayoutLauncherWidget's own row-level PaintCopyGlyph (no icon asset library in this app - see
+    /// WarningIcon's own comment). The front square's corner is punched out of the back square first
+    /// using ThemedField (whichever bar button this is currently painting for - see PaintExtraButtons
+    /// - own fill) so it reads as sitting on top instead of two crossing outlines. Protected, not
+    /// private - FenceForm's own Copy Fence button uses this too (see its own ExtraButtons), not just
+    /// this base's Copy Settings button that originally motivated it.</summary>
+    protected void PaintCopyIconGlyph(Graphics g, Rectangle rect)
     {
         var cx = rect.X + rect.Width / 2f;
         var cy = rect.Y + rect.Height / 2f;
@@ -999,6 +1024,34 @@ internal abstract class LayeredWidgetForm : Form
                 g.FillRectangle(punchBrush, frontRect);
             g.DrawRectangle(copyPen, frontRect.X, frontRect.Y, frontRect.Width, frontRect.Height);
         }
+
+        g.SmoothingMode = previousSmoothing;
+    }
+
+    /// <summary>"Copy Settings To" - a simplified eyedropper/pipette (a diagonal shaft with a filled
+    /// tip, the same "drop" a real one leaves), proportioned off whichever rect it's handed rather
+    /// than the fixed pixel offsets DropdownMenu's own GridGlyph.Eyedropper uses for its always-20px
+    /// color-grid circle. Icon-only, no text label - the button is too small for "Copy Settings To"
+    /// to fit, hence the tooltip (see _chromeButtonTooltip).</summary>
+    private void PaintEyedropperGlyph(Graphics g, Rectangle rect)
+    {
+        var cx = rect.X + rect.Width / 2f;
+        var cy = rect.Y + rect.Height / 2f;
+        var scale = Math.Min(rect.Width, rect.Height);
+        var half = scale * 0.26f;
+        var tipRadius = Math.Max(1.2f, scale * 0.09f);
+
+        var previousSmoothing = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        var x1 = cx + half;
+        var y1 = cy - half;
+        var x2 = cx - half * 0.7f;
+        var y2 = cy + half * 0.7f;
+        using (var dropperPen = new Pen(Color.WhiteSmoke, Math.Max(1f, scale * 0.07f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            g.DrawLine(dropperPen, x1, y1, x2, y2);
+        using (var tipBrush = new SolidBrush(Color.WhiteSmoke))
+            g.FillEllipse(tipBrush, x2 - tipRadius, y2 - tipRadius, tipRadius * 2, tipRadius * 2);
 
         g.SmoothingMode = previousSmoothing;
     }
@@ -1040,33 +1093,97 @@ internal abstract class LayeredWidgetForm : Form
         g.DrawPath(borderPen, path);
     }
 
-    /// <summary>A simple text-labeled button chained off the Settings button - same rounded-rect-plus-
-    /// centered-text chrome as Settings itself, just for whatever extra actions a subclass wants there
-    /// (Layout Launcher's Close/Manage Layouts...) instead of hand-rolling the same rect-chaining/
-    /// paint/hit-test/arm-fire plumbing per button. A subclass with hand-drawn icon buttons of its own
-    /// (a Fence's copy/delete squares, which need custom glyphs rather than a plain text label) can
-    /// keep drawing those separately - this is only for the common "just a short label" case.</summary>
-    protected readonly record struct ChromeButton(string Label, int Width, Action OnClick);
+    /// <summary>A button chained off the Settings button - same rounded-rect chrome as Settings
+    /// itself, painted either as a short centered text label (Layout Launcher's Close, Widget
+    /// Manager's Help) or, when PaintGlyph is supplied, a custom hand-drawn icon (a Fence's own
+    /// Copy/Delete squares) instead of hand-rolling the same rect-chaining/paint/hit-test/arm-fire
+    /// plumbing per button. Once this bar band gets too narrow to fit every declared button (see
+    /// VisibleExtraButtonCount), buttons drop off the bar outermost-first, one at a time as space
+    /// runs out - not all-or-nothing - and reappear as their own small icons at the top of the
+    /// Settings dropdown instead (see BuildSettingsRows), live-tracking width both directions. Tooltip
+    /// is what that dropdown row (and this button's own bar hover tooltip - see UpdateButtonHover)
+    /// shows for it, since PaintGlyph draws no text of its own to fall back on. Falls back to Label
+    /// itself when Tooltip is left null, for a button whose glyph already doubles as an adequate name
+    /// (a plain "×", say).</summary>
+    protected readonly record struct ChromeButton(string Label, int Width, Action OnClick,
+        string? Tooltip = null, Action<Graphics, Rectangle>? PaintGlyph = null)
+    {
+        internal string EffectiveTooltip => Tooltip ?? Label;
+    }
 
-    /// <summary>Extra buttons chained immediately outward from the Settings button, in declared order -
-    /// none by default, only shown/hit-testable while ShowsButtons is true (same as Settings itself).</summary>
+    /// <summary>Extra buttons chained immediately outward from Copy Settings, in declared order -
+    /// none by default, only shown/hit-testable while ShowsButtons is true (same as Settings itself).
+    /// See AllBarButtons for where Copy Settings itself fits into this same chain.</summary>
     protected virtual IReadOnlyList<ChromeButton> ExtraButtons => Array.Empty<ChromeButton>();
+
+    /// <summary>"Copy Settings To" as a ChromeButton, folded into the same bar-button chain as
+    /// ExtraButtons (see AllBarButtons) instead of being its own separate, always-visible-regardless-
+    /// of-width mechanism the way it used to be - Width/OnClick mirror exactly what the old dedicated
+    /// TryArmCopySettingsButton/FireArmedCopySettingsButton hard-coded. OpenCopySettingsPicker is the
+    /// same picker-opening logic FireArmedCopySettingsButton used to run inline, just extracted so it
+    /// can be this button's own OnClick. PaintEyedropperGlyph (a "sample this widget's look" pipette)
+    /// rather than the two-squares "duplicate" glyph - that one now belongs to FenceForm's own Copy
+    /// Fence button instead (see its own ExtraButtons), which is a much more literal duplicate.</summary>
+    private ChromeButton CopySettingsButton => new(
+        "Copy Settings To", CopySettingsButtonWidth, OpenCopySettingsPicker, "Copy Settings To", PaintEyedropperGlyph);
+
+    /// <summary>The full bar-button chain, in order: Copy Settings, then every subclass-declared
+    /// ExtraButtons entry. GetExtraButtonRect/VisibleExtraButtonCount/PaintExtraButtons/
+    /// TryGetExtraButtonAt/BuildOverflowButtonRows all operate over this single combined list now -
+    /// Copy Settings used to be a wholly separate mechanism with no overflow handling of its own,
+    /// which meant it stayed pinned to the bar even once there was visibly no room for it; folding it
+    /// in here means it gets exactly the same fluid, one-at-a-time drop-to-the-dropdown treatment
+    /// every other bar button already has (see VisibleExtraButtonCount).</summary>
+    private IReadOnlyList<ChromeButton> AllBarButtons
+    {
+        get
+        {
+            var combined = new List<ChromeButton>(ExtraButtons.Count + 1) { CopySettingsButton };
+            combined.AddRange(ExtraButtons);
+            return combined;
+        }
+    }
+
+    /// <summary>How many of AllBarButtons (Copy Settings first, then every ExtraButtons entry in
+    /// order), counting from index 0, still fit on the bar at contentWidth - generalizes what used to
+    /// be FenceForm's own private, hand-rolled ButtonBandIsTight (an all-or-nothing check sized for
+    /// exactly its own two buttons) to this whole chain, of any length, and fluidly rather than as a
+    /// single breakpoint: as contentWidth shrinks, buttons drop off the bar outermost-first, one at a
+    /// time, exactly as each one's own chained position would first slide past the window's edge -
+    /// not everything at once just because the last one no longer fits. Whatever doesn't fit
+    /// (AllBarButtons.Count minus this) reappears as icons at the top of the Settings dropdown
+    /// instead (see BuildOverflowButtonRows) - same total buttons, same reach, split live between the
+    /// two places, both directions, purely as a function of the current width.</summary>
+    protected int VisibleExtraButtonCount(int contentWidth)
+    {
+        var total = SettingsButtonWidth;
+        var count = 0;
+        foreach (var button in AllBarButtons)
+        {
+            var next = total + SettingsButtonGap + button.Width;
+            if (next > contentWidth)
+                break;
+            total = next;
+            count++;
+        }
+        return count;
+    }
 
     // Armed on a subclass's own OnMouseDown (see TryArmExtraButton), fired on the matching OnMouseUp
     // only if the cursor is still over the same button (see FireArmedExtraButton) - the same
     // arm-then-fire pattern FenceForm's own Settings/New/Delete buttons already use, just centralized
-    // here instead of each subclass keeping its own "which button is currently armed" field.
+    // here instead of each subclass keeping its own "which button is currently armed" field. Covers
+    // Copy Settings too now (index 0 of AllBarButtons) - there's no separate armed flag for it anymore.
     private int? _armedExtraButtonIndex;
 
-    /// <summary>Chains outward from the Copy Settings button (itself chained off Settings - see
-    /// GetCopySettingsButtonRect) the same way a Fence's own New/Delete buttons do - index 0 sits
-    /// immediately next to Copy Settings, index 1 next to that, and so on. Each button uses its own
-    /// declared Width (see ChromeButton) rather than a fixed size, so a short Close glyph and a much
-    /// wider "Manage Layouts..." label can both chain correctly.</summary>
+    /// <summary>Chains outward from the Settings button itself - index 0 (Copy Settings) sits
+    /// immediately next to it, index 1 next to that, and so on through AllBarButtons. Each button
+    /// uses its own declared Width (see ChromeButton) rather than a fixed size, so a short Close
+    /// glyph and a much wider "Manage Layouts..." label can both chain correctly.</summary>
     protected Rectangle GetExtraButtonRect(int contentWidth, bool onLeft, int index)
     {
-        var buttons = ExtraButtons;
-        var previous = GetCopySettingsButtonRect(contentWidth, onLeft);
+        var buttons = AllBarButtons;
+        var previous = GetSettingsButtonRect(contentWidth, onLeft);
         var current = previous;
         for (var i = 0; i <= index; i++)
         {
@@ -1078,13 +1195,17 @@ internal abstract class LayeredWidgetForm : Form
         return current;
     }
 
-    /// <summary>Which extra button (if any) contentPoint lands on - used both for a subclass's own
-    /// HitTest (to route a click there to HTCLIENT instead of the margin's move/resize handling) and
-    /// internally by TryArmExtraButton.</summary>
+    /// <summary>Which bar button (Copy Settings or an ExtraButtons entry - see AllBarButtons), if
+    /// any, contentPoint lands on - used both for a subclass's own HitTest (to route a click there to
+    /// HTCLIENT instead of the margin's move/resize handling) and internally by TryArmExtraButton.
+    /// Only ever matches a currently-visible button (see VisibleExtraButtonCount) - anything beyond
+    /// that isn't painted on the bar (see PaintExtraButtons), so nothing here should be clickable
+    /// there either.</summary>
     protected bool TryGetExtraButtonAt(int contentWidth, bool onLeft, Point contentPoint, out int index)
     {
-        var buttons = ExtraButtons;
-        for (var i = 0; i < buttons.Count; i++)
+        index = -1;
+        var visibleCount = VisibleExtraButtonCount(contentWidth);
+        for (var i = 0; i < visibleCount; i++)
         {
             if (GetExtraButtonRect(contentWidth, onLeft, i).Contains(contentPoint))
             {
@@ -1092,42 +1213,17 @@ internal abstract class LayeredWidgetForm : Form
                 return true;
             }
         }
-        index = -1;
         return false;
     }
 
-    // Same arm-then-fire pattern as _armedExtraButtonIndex below, for the Copy Settings button - a
-    // bool rather than an index since there's only ever the one button, unlike ExtraButtons' own
-    // per-subclass list.
-    private bool _armedCopySettingsButton;
-
-    /// <summary>Arms the Copy Settings button if contentPoint lands on it - a subclass's own
-    /// OnMouseDown calls this right after its own Settings-button check, before TryArmExtraButton
-    /// (see each subclass's own OnMouseDown for the exact ordering).</summary>
-    protected bool TryArmCopySettingsButton(Point contentPoint)
+    /// <summary>The picker-opening half of what a click on the Copy Settings button does (see
+    /// CopySettingsButton) - opens the cross-widget picker overlay (see CopySettingsOverlay), with
+    /// this widget as the copy source. Used as that button's own OnClick, fired the same way any
+    /// other AllBarButtons entry's OnClick is (see FireArmedExtraButton) - no separate armed flag or
+    /// "still hovering" re-check needed here anymore, FireArmedExtraButton already does both
+    /// generically before invoking OnClick at all.</summary>
+    private void OpenCopySettingsPicker()
     {
-        var contentWidth = GetContentSize().Width;
-        var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
-        if (!GetCopySettingsButtonRect(contentWidth, onLeft).Contains(contentPoint))
-            return false;
-        _armedCopySettingsButton = true;
-        return true;
-    }
-
-    /// <summary>Fires the Copy Settings button if it was armed (see TryArmCopySettingsButton) and the
-    /// mouse is still over it on release - opens the cross-widget picker overlay (see
-    /// CopySettingsOverlay), with this widget as the copy source.</summary>
-    protected void FireArmedCopySettingsButton(Point contentPoint)
-    {
-        if (!_armedCopySettingsButton)
-            return;
-        _armedCopySettingsButton = false;
-
-        var contentWidth = GetContentSize().Width;
-        var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
-        if (!GetCopySettingsButtonRect(contentWidth, onLeft).Contains(contentPoint))
-            return;
-
         var overlay = new CopySettingsOverlay(this);
         var pickerStore = new CopySettingsPickerStore();
         var groupPicker = new CopySettingsGroupPicker(this, Fences, pickerStore.Load(), pickerStore);
@@ -1188,7 +1284,7 @@ internal abstract class LayeredWidgetForm : Form
             return;
         _armedExtraButtonIndex = null;
 
-        var buttons = ExtraButtons;
+        var buttons = AllBarButtons;
         if (index >= buttons.Count)
             return;
         var contentWidth = GetContentSize().Width;
@@ -1199,12 +1295,15 @@ internal abstract class LayeredWidgetForm : Form
 
     private void PaintExtraButtons(Graphics g, int contentWidth)
     {
-        var buttons = ExtraButtons;
-        if (buttons.Count == 0)
+        var buttons = AllBarButtons;
+        // Only paints whichever buttons currently fit - whatever doesn't reappears in the Settings
+        // dropdown instead (see BuildSettingsRows/VisibleExtraButtonCount's own doc comment).
+        var visibleCount = VisibleExtraButtonCount(contentWidth);
+        if (visibleCount == 0)
             return;
 
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
-        for (var i = 0; i < buttons.Count; i++)
+        for (var i = 0; i < visibleCount; i++)
         {
             var buttonRect = ToWindow(GetExtraButtonRect(contentWidth, onLeft, i));
             // Same opaque-backing/GDI+-AntiAlias reasoning as PaintSettingsButton's own two comments.
@@ -1217,6 +1316,12 @@ internal abstract class LayeredWidgetForm : Form
 
             if (_hoveredButtonKind == HoveredButtonKind.Extra && _hoveredButtonIndex == i)
                 PaintButtonHoverTint(g, buttonRect);
+
+            if (buttons[i].PaintGlyph is { } paintGlyph)
+            {
+                paintGlyph(g, buttonRect);
+                continue;
+            }
 
             var previousTextHint = g.TextRenderingHint;
             g.TextRenderingHint = TextRenderingHint.AntiAlias;
@@ -1949,7 +2054,7 @@ internal abstract class LayeredWidgetForm : Form
     protected bool IsOverHeaderCloseButton(Point contentPoint) =>
         TitleVisible && ShowHeaderCloseButton && GetHeaderCloseButtonRect(GetContentSize().Width).Contains(contentPoint);
 
-    // Same arm-then-fire pattern as _armedCopySettingsButton/_armedExtraButtonIndex above.
+    // Same arm-then-fire pattern as _armedExtraButtonIndex above.
     private bool _headerCloseButtonArmed;
 
     /// <summary>Arms the header close button if contentPoint lands on it - a subclass's own
@@ -2017,19 +2122,10 @@ internal abstract class LayeredWidgetForm : Form
             : new Rectangle(contentWidth - SettingsButtonWidth, y, SettingsButtonWidth, SettingsButtonHeight);
     }
 
+    /// <summary>Copy Settings' own declared width (see CopySettingsButton) - kept as its own virtual
+    /// property, not just an inline literal, in case a future subclass ever needs to widen it the way
+    /// SettingsButtonWidth/SettingsButtonHeight are already overridable.</summary>
     protected virtual int CopySettingsButtonWidth => 22;
-
-    /// <summary>"Copy Settings To" - chains immediately outward from the Settings button itself, the
-    /// same way GetExtraButtonRect's own per-button math chains outward from index 0 (see that
-    /// method's own comment) - which now starts from here instead of straight off Settings, so every
-    /// subclass's own ExtraButtons (a Fence's Duplicate/Delete, Layout Launcher/Widget Manager's "×")
-    /// shift outward by one slot automatically, with no changes needed in any of them.</summary>
-    protected Rectangle GetCopySettingsButtonRect(int contentWidth, bool onLeft)
-    {
-        var settings = GetSettingsButtonRect(contentWidth, onLeft);
-        var x = onLeft ? settings.Right + SettingsButtonGap : settings.X - SettingsButtonGap - CopySettingsButtonWidth;
-        return new Rectangle(x, settings.Y, CopySettingsButtonWidth, SettingsButtonHeight);
-    }
 
     /// <summary>Measures the actual options menu (BuildSettingsRows) against the screen this window
     /// is currently on, using the button's default top-right placement as the anchor - i.e. "would
@@ -2112,15 +2208,19 @@ internal abstract class LayeredWidgetForm : Form
     }
 
     /// <summary>Recomputes which button (if any) contentPoint sits over, repainting only on an actual
-    /// change - null means "not hovering the client area at all" (see OnMouseLeave). Settings/
-    /// CopySettings/Extra take priority over Content since they can visually overlap in a very
-    /// small/narrow widget. Also drives _copySettingsTooltip - the only base-owned button that's
-    /// icon-only (see PaintPaintBrushGlyph's own comment), so it's the only one that needs one.</summary>
+    /// change - null means "not hovering the client area at all" (see OnMouseLeave). Settings/Extra
+    /// take priority over Content since they can visually overlap in a very small/narrow widget.
+    /// Also drives _chromeButtonTooltip - Copy Settings (AllBarButtons[0]) is icon-only (a hand-drawn
+    /// eyedropper glyph, no text label of its own - see PaintEyedropperGlyph), and any other
+    /// AllBarButtons entry with a custom PaintGlyph (a Fence's own Copy/Delete squares) is exactly the
+    /// same situation, so every one of them shares this one tooltip rather than each needing a
+    /// separate copy of it - there's no dedicated HoveredButtonKind.CopySettings case anymore, Copy
+    /// Settings is just index 0 of the same Extra chain now.</summary>
     private void UpdateButtonHover(Point? contentPoint)
     {
         var kind = HoveredButtonKind.None;
         var index = -1;
-        Rectangle copySettingsRect = default;
+        Rectangle extraButtonRect = default;
 
         if (contentPoint is Point point)
         {
@@ -2131,14 +2231,11 @@ internal abstract class LayeredWidgetForm : Form
             {
                 kind = HoveredButtonKind.Settings;
             }
-            else if (ShowsButtons && (copySettingsRect = GetCopySettingsButtonRect(size.Width, onLeft)).Contains(point))
-            {
-                kind = HoveredButtonKind.CopySettings;
-            }
             else if (ShowsButtons && TryGetExtraButtonAt(size.Width, onLeft, point, out var extraIndex))
             {
                 kind = HoveredButtonKind.Extra;
                 index = extraIndex;
+                extraButtonRect = GetExtraButtonRect(size.Width, onLeft, extraIndex);
             }
             // Not gated by ShowsButtons, unlike every check above - the header close button is meant
             // to be reachable (and show hover feedback) without the widget being engaged first.
@@ -2153,9 +2250,10 @@ internal abstract class LayeredWidgetForm : Form
             }
         }
 
-        var tooltipChanged = kind == HoveredButtonKind.CopySettings
-            ? _copySettingsTooltip.Show("Copy Settings To", ToWindow(copySettingsRect))
-            : _copySettingsTooltip.Hide();
+        var tooltipText = kind == HoveredButtonKind.Extra ? AllBarButtons[index].EffectiveTooltip : null;
+        var tooltipChanged = tooltipText is not null
+            ? _chromeButtonTooltip.Show(tooltipText, ToWindow(extraButtonRect))
+            : _chromeButtonTooltip.Hide();
 
         if (kind == _hoveredButtonKind && index == _hoveredButtonIndex && !tooltipChanged)
             return;
@@ -2254,30 +2352,35 @@ internal abstract class LayeredWidgetForm : Form
         }
 
         LayeredWindowPresenter.Present(Handle, buffer, new Point(windowRect.Left, windowRect.Top), RenderOpacity.Value,
-            GetFullOpacityRegions(contentWidth));
+            GetFullOpacityRegions(contentWidth, contentHeight));
     }
 
     /// <summary>Window-space rects (see ToWindow) that should render at full opacity regardless of
-    /// Style.Opacity - the Settings button, its chained ChromeButtons (Layout Launcher's Close), and
-    /// whatever a subclass's own AdditionalFullOpacityRegions contributes (a Fence's own hand-drawn
-    /// New/Delete squares) - the same "always fully visible" treatment the Settings dropdown already
-    /// gets for free just by being a separate window. Null while ShowsButtons is false (nothing to
-    /// exempt - none of these are even painted then).</summary>
-    private List<Rectangle>? GetFullOpacityRegions(int contentWidth)
+    /// Style.Opacity - the Settings button, whichever AllBarButtons currently fit on the bar (Copy
+    /// Settings plus a subclass's own ExtraButtons - see VisibleExtraButtonCount), _chromeButtonTooltip
+    /// itself while it's showing (it belongs to one of those bar buttons - without this it visibly
+    /// washed out against the button it's pointing at, which stays solid), and whatever a subclass's
+    /// own AdditionalFullOpacityRegions contributes - the same "always fully visible" treatment the
+    /// Settings dropdown already gets for free just by being a separate window. Null while ShowsButtons
+    /// is false (nothing to exempt - none of these are even painted then).</summary>
+    private List<Rectangle>? GetFullOpacityRegions(int contentWidth, int contentHeight)
     {
         if (!ShowsButtons)
             return null;
 
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
-        var regions = new List<Rectangle>
-        {
-            ToWindow(GetSettingsButtonRect(contentWidth, onLeft)),
-            ToWindow(GetCopySettingsButtonRect(contentWidth, onLeft)),
-        };
+        var regions = new List<Rectangle> { ToWindow(GetSettingsButtonRect(contentWidth, onLeft)) };
 
-        var buttons = ExtraButtons;
-        for (var i = 0; i < buttons.Count; i++)
+        // Only whichever buttons are actually painted on the bar right now (see
+        // VisibleExtraButtonCount) - no region needed for one that currently isn't there.
+        var visibleCount = VisibleExtraButtonCount(contentWidth);
+        for (var i = 0; i < visibleCount; i++)
             regions.Add(ToWindow(GetExtraButtonRect(contentWidth, onLeft, i)));
+
+        // Same bounds argument PaintChrome's own _chromeButtonTooltip.Paint call passes - has to
+        // match exactly, or this would exempt a different rect than the one actually painted.
+        if (_chromeButtonTooltip.GetPillRect(Font, ToWindow(new Rectangle(0, 0, contentWidth, contentHeight))) is { } tooltipRect)
+            regions.Add(tooltipRect);
 
         regions.AddRange(AdditionalFullOpacityRegions(contentWidth));
 

@@ -1,9 +1,11 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Drawing.Text;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.Fences.Native;
+using DesktopTool.Features.Fences.UI;
 using DesktopTool.Features.Snapping;
 using DesktopTool.Native;
 using DesktopTool.UI;
@@ -18,9 +20,13 @@ namespace DesktopTool.Features.FolderFences.UI;
 /// FileSystemWatcher keeps the grid in sync with the real folder while it's open. Clicking into a
 /// subfolder browses into it in place; the header shows a breadcrumb of however deep that's gone
 /// (see DisplayTitle), and a back button to its own left (see PaintBackButton/BackButtonRect) goes
-/// back up a level. Nothing here is reorderable, renameable, or draggable between fences the way
-/// FenceForm's own items are, since there's no per-item state of this widget's own to reorder/
-/// rename in the first place.
+/// back up a level. Nothing here is reorderable or renameable the way FenceForm's own items are,
+/// since there's no per-item state of this widget's own to reorder/rename in the first place - a
+/// grid item CAN be dragged onto a different widget, though (see OnMouseDown/OnMouseMove/OnMouseUp):
+/// onto an ordinary fence, it just adds a reference to the same real file there (see
+/// FenceManager.AddFiles); a dragged subfolder onto a *different*, still-empty folder fence connects
+/// that fence to it instead (see ConnectFolder), the same as dropping it there directly would. The
+/// real file, and so this fence's own live mirror of it, is untouched either way.
 ///
 /// Move, resize, snap, rename, and the Settings button/dropdown are all LayeredWidgetForm's own -
 /// this class only supplies the small hooks those need plus everything genuinely specific to a
@@ -51,7 +57,12 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     private const int IconTopPadding = 8;
     private const int CellWidth = 84;
     private const int CellHeight = 94;
-    private const int EmptyStatePlusSize = 64;
+    // Smaller than a regular item's own IconSize (48) - it's a placeholder glyph, not a real icon,
+    // so it shouldn't visually outweigh one. Shrinks further still (see EmptyStatePlusRect) rather
+    // than ever overlapping the header on a fence dragged shorter than this - MinEmptyStatePlusSize
+    // is the floor that stops short of, not below.
+    private const int EmptyStatePlusSize = 40;
+    private const int MinEmptyStatePlusSize = 16;
 
     private const int CmdChangeFolder = 1;
     private const int CmdOpenInExplorer = 2;
@@ -79,15 +90,19 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     private readonly FolderFenceModel _model;
     private readonly FolderFenceManager _manager;
+    // Only ever used to hand an item off to a different fence it gets dragged onto (see
+    // OnMouseUp/ComputeDragHint below) - the same reference this widget's own base constructor
+    // already takes for snapping, just also kept here since dragging a grid item out needs it too.
+    private readonly FenceManager _fences;
     private readonly Dictionary<string, Icon?> _iconCache = new();
     private readonly List<GridEntry> _entries = new();
     private readonly Scrollbar _scrollbar = new();
-    private readonly PaintedTooltip _buttonTooltip = new();
     private readonly System.Windows.Forms.Timer _refreshTimer = new() { Interval = 150 };
 
     // Relative path under _model.RootFolderPath currently being browsed - null means the root
-    // itself. Deliberately not persisted (see FolderFenceModel.RootFolderPath's own doc comment) -
-    // browsing position resets to the root every time this widget is (re)created.
+    // itself. Persisted via _model.CurrentSubPath (see its own doc comment) - NavigateInto/NavigateUp
+    // both write back to it, and the constructor seeds this field from it (once re-validated) rather
+    // than always starting at the root the way this used to.
     private string? _currentSubPath;
     private FileSystemWatcher? _watcher;
 
@@ -99,7 +114,34 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     private bool _plusButtonArmed;
     private bool _backButtonArmed;
 
+    // In-app drag of a grid item onto a different (ordinary) fence - same arm-then-drag-then-drop
+    // shape as FenceForm's own item drag, just one-directional: a folder fence's own contents are
+    // always whatever's really in the folder (see RefreshEntries), so there's no equivalent of
+    // FenceForm's same-fence reorder or "drag off onto the desktop removes it" - landing anywhere
+    // that isn't a different live fence just cancels the drag with no effect.
+    private const int DragThreshold = 4;
+    private int? _dragArmIndex;
+    private Point _dragArmPoint;
+    private int? _draggingIndex;
+    private DragGhostWindow? _dragGhost;
+
     public Guid FolderFenceId => _model.Id;
+
+    /// <summary>Whether this folder fence is still in its empty "+" state - used by a *different*
+    /// folder fence's own cross-fence item drag (see its own ComputeDragHint/OnMouseUp) to know a
+    /// dragged subfolder landing here would connect this fence, the same rule a populated folder
+    /// fence's own OnDragEnter/OnDragDrop already enforces for an external OLE drop.</summary>
+    internal bool IsEmpty => _model.RootFolderPath is null;
+
+    /// <summary>Used only for the cross-fence "Connect to {name}" drag hint (see another folder
+    /// fence's own ComputeDragHint) - every other cross-fence reference goes through FolderFenceId/
+    /// FolderFenceManager instead. Mirrors FenceForm.FenceName.</summary>
+    internal string FolderFenceName => _model.Name;
+
+    /// <summary>Points this fence at path from outside - a different folder fence's own item drag
+    /// landing here (see its own OnMouseUp) rather than an OLE drop or the empty "+" button, but
+    /// otherwise identical to either of those (see SetRootFolder itself).</summary>
+    internal void ConnectFolder(string path) => SetRootFolder(path);
 
     /// <summary>Which model LayeredWidgetForm's own theme derivation and default Settings-dropdown
     /// rows read from - FolderFenceModel already implements IWidgetStyle.</summary>
@@ -144,29 +186,49 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     /// itself already only ever applies this in the "button row is at the top" branch.</summary>
     protected override int SettingsButtonRowInset => TitleVisible ? TabExtraHeight : 0;
 
-    private int GridTop => _model.HideHeader ? 0 : TitleBarHeight;
+    // TitleVisible (== !HideHeader, the overridden property below - always true for this widget,
+    // never the raw _model.HideHeader field) - HideHeader is forced off for a folder fence (see its
+    // own override's doc comment on why), so reading _model.HideHeader directly here would disagree
+    // with what's actually rendered whenever a fence's persisted HideHeader happens to still be true
+    // (pre-existing data from before that override existed, say).
+    private int GridTop => TitleVisible ? TitleBarHeight : 0;
 
     /// <summary>Item cell height when labels are hidden (FolderFenceModel.HideLabels) - just the
     /// icon plus a little breathing room, same as FenceForm's own EffectiveCellHeight.</summary>
     private int EffectiveCellHeight => _model.HideLabels ? IconTopPadding + IconSize + 8 : CellHeight;
 
-    /// <summary>The header shows a breadcrumb ("base/sub/sub") while browsing into a subfolder,
-    /// rather than just the fence's own bare name - Title itself (LayeredWidgetForm's own rename
-    /// get/set hook) stays untouched, so renaming still only ever edits/seeds from the real base
-    /// name, never this. Forward slashes regardless of OS - reads naturally as a path breadcrumb
-    /// either way, and this is display-only, never fed back into Path.Combine/GetRelativePath.</summary>
-    protected override string DisplayTitle => _currentSubPath is null
-        ? Title
-        : $"{Title}/{_currentSubPath.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/')}";
+    /// <summary>The empty state (RootFolderPath null - a fresh fence, or one just Cleared via the
+    /// "−" button) shows a plain instruction instead of the fence's own name, since a never-pointed-
+    /// at fence hasn't been given a meaningful name to show yet. Otherwise the header shows a
+    /// breadcrumb ("base/sub/sub") while browsing into a subfolder, rather than just the fence's own
+    /// bare name. Title itself (LayeredWidgetForm's own rename get/set hook) stays untouched either
+    /// way, so renaming still only ever edits/seeds from the real base name, never this - a rename
+    /// started from the empty state still opens with whatever _model.Name already is (usually still
+    /// "Folder Fence"), not this instruction text. Forward slashes regardless of OS - reads naturally
+    /// as a path breadcrumb either way, and this is display-only, never fed back into
+    /// Path.Combine/GetRelativePath.</summary>
+    protected override string DisplayTitle => _model.RootFolderPath is null
+        ? "drag in or click + to connect folder"
+        : _currentSubPath is null
+            ? Title
+            : $"{Title}/{_currentSubPath.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/')}";
 
     /// <summary>Reserves room for the back button (see BackButtonRect) only while it's actually
     /// showing - at the root, the title text starts exactly where every other widget's does.</summary>
     protected override int TitleTextInset => _currentSubPath is null ? 0 : BackButtonSize + BackButtonTextGap;
 
     /// <summary>How wide the tab itself is for a given contentWidth - a fraction of it, clamped to
-    /// a sensible min/max, and never wider than contentWidth itself on a very narrow fence.</summary>
-    private int GetTabWidth(int contentWidth) =>
-        Math.Clamp((int)(contentWidth * TabWidthFraction), MinTabWidth, Math.Min(MaxTabWidth, contentWidth));
+    /// a sensible min/max, and never wider than contentWidth itself on a very narrow fence. The
+    /// floor is re-clamped down to that same ceiling (rather than passed to Math.Clamp as-is) for a
+    /// fence narrower than MinTabWidth itself - Math.Clamp throws if its own min ends up greater
+    /// than its max, which a plain MinTabWidth floor would do the moment contentWidth drops below
+    /// it.</summary>
+    private int GetTabWidth(int contentWidth)
+    {
+        var max = Math.Min(MaxTabWidth, contentWidth);
+        var min = Math.Min(MinTabWidth, max);
+        return Math.Clamp((int)(contentWidth * TabWidthFraction), min, max);
+    }
 
     /// <summary>The whole widget's own outline, folder tab included - a single continuous path
     /// (tab's own rounded top-left corner and diagonal cut, straight into the header's own top
@@ -265,13 +327,18 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     /// (_currentSubPath set), a plain left click anywhere on it goes back up a level, not just on
     /// the small "<-" glyph itself (see BackButtonRect) - reads as "the whole header is the back
     /// button" while there's somewhere to go back to. Only meaningful while the header is actually
-    /// showing at all (!_model.HideHeader) - callers already guard on that too.</summary>
+    /// showing at all (TitleVisible) - callers already guard on that too.</summary>
     private Rectangle HeaderClickableRect(int contentWidth) => new(0, 0, contentWidth, TitleBarHeight);
 
-    /// <summary>"−" clears RootFolderPath back to the empty "+" state (see ClearFolder); "×" deletes
-    /// this widget entirely, with confirmation (see ConfirmDelete) - same chained-off-Settings slot
-    /// FenceForm's own hand-drawn "+"/"x" occupy, just plain ChromeButtons here since a minus sign
-    /// and an "x" need no custom glyph of their own.</summary>
+    /// <summary>Copy Folder Fence duplicates this fence's own settings into a new, empty folder
+    /// fence (see FolderFenceManager.CreateFolderFenceLike) - same two-squares "duplicate" glyph
+    /// FenceForm's own Copy Fence button uses (see LayeredWidgetForm.PaintCopyIconGlyph), for the
+    /// same action on the same kind of widget. "−" clears RootFolderPath back to the empty "+" state
+    /// (see ClearFolder); "×" deletes this widget entirely, with confirmation (see ConfirmDelete) -
+    /// plain ChromeButtons, since neither a minus sign nor an "x" needs a custom glyph of its own.
+    /// Declared in this order (Copy closest to Copy Settings, Delete outermost) so on a narrowing
+    /// fence Delete drops off the bar into the Settings dropdown first, matching FenceForm's own
+    /// Copy/Delete ordering.</summary>
     protected override IReadOnlyList<ChromeButton> ExtraButtons { get; }
 
     public FolderFenceForm(FolderFenceModel model, FolderFenceManager manager, FenceManager fences)
@@ -279,11 +346,25 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     {
         _model = model;
         _manager = manager;
+        _fences = fences;
+
+        // Restores whichever subfolder this fence was last browsed into, re-validated against disk
+        // first - the real folder could have been renamed/deleted/moved since the last session, in
+        // which case this falls back to the root (and corrects the stale value on this same Save
+        // pass) rather than trusting it blindly.
+        if (_model.RootFolderPath is not null && _model.CurrentSubPath is not null)
+        {
+            if (Directory.Exists(Path.Combine(_model.RootFolderPath, _model.CurrentSubPath)))
+                _currentSubPath = _model.CurrentSubPath;
+            else
+                _model.CurrentSubPath = null;
+        }
 
         ExtraButtons = new List<ChromeButton>
         {
-            new("−", 22, ClearFolder),
-            new("×", 22, ConfirmDelete),
+            new("+", 22, () => _manager.CreateFolderFenceLike(FolderFenceId), "Copy Folder Fence", PaintCopyIconGlyph),
+            new("−", 22, ClearFolder, "Clear Folder"),
+            new("×", 22, ConfirmDelete, "Delete Folder Fence"),
         };
 
         FormBorderStyle = FormBorderStyle.None;
@@ -411,7 +492,6 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         var contentPoint = ToContent(windowPoint);
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
         if (ShowsButtons && (GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
-            || GetCopySettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
             || TryGetExtraButtonAt(contentWidth, onLeft, contentPoint, out _)))
             return HTCLIENT;
 
@@ -422,7 +502,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         // IsOverHeaderCloseButton above - not gated by ShowsButtons either, since this is core
         // navigation, not extra engagement-only chrome. The whole header row while browsing a
         // subfolder, not just the "<-" glyph itself - see HeaderClickableRect.
-        if (_currentSubPath is not null && !_model.HideHeader && HeaderClickableRect(contentWidth).Contains(contentPoint))
+        if (_currentSubPath is not null && TitleVisible && HeaderClickableRect(contentWidth).Contains(contentPoint))
             return HTCLIENT;
 
         if (ShowsButtons)
@@ -438,7 +518,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             return resizeCode;
         }
 
-        if (!_model.HideHeader && y - TopBand <= TitleBarHeight)
+        if (TitleVisible && y - TopBand <= TitleBarHeight)
             return HTBORDER;
 
         return HTCLIENT;
@@ -473,7 +553,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
         if (TryArmHeaderCloseButton(contentPoint))
             return;
-        if (_currentSubPath is not null && !_model.HideHeader && HeaderClickableRect(contentSize.Width).Contains(contentPoint))
+        if (_currentSubPath is not null && TitleVisible && HeaderClickableRect(contentSize.Width).Contains(contentPoint))
         {
             _backButtonArmed = true;
             return;
@@ -483,8 +563,6 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             _settingsButtonArmed = true;
             return;
         }
-        if (ShowsButtons && TryArmCopySettingsButton(contentPoint))
-            return;
         if (ShowsButtons && TryArmExtraButton(contentPoint))
             return;
 
@@ -497,7 +575,16 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         }
 
         if (_model.RootFolderPath is null && EmptyStatePlusRect(contentSize).Contains(contentPoint))
+        {
             _plusButtonArmed = true;
+            return;
+        }
+
+        if (_model.RootFolderPath is not null && IndexAtGridPosition(contentPoint) is int index)
+        {
+            _dragArmIndex = index;
+            _dragArmPoint = e.Location; // raw window-space is fine here - only ever used as a delta
+        }
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -514,8 +601,69 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             return;
         }
 
+        if (_draggingIndex is null && _dragArmIndex is int armIndex && MouseButtons == MouseButtons.Left)
+        {
+            var dx = e.X - _dragArmPoint.X;
+            var dy = e.Y - _dragArmPoint.Y;
+            if (dx * dx + dy * dy >= DragThreshold * DragThreshold)
+            {
+                _draggingIndex = armIndex;
+                _dragArmIndex = null;
+                Capture = true;
+
+                var entry = _entries[armIndex];
+                _dragGhost = new DragGhostWindow(GetIcon(entry.Path), GetDisplayName(entry));
+            }
+        }
+
+        if (_draggingIndex is not null)
+        {
+            _dragGhost?.SetHint(ComputeDragHint(e.Location));
+            _dragGhost?.MoveTo(PointToScreen(e.Location));
+            RenderAndPresent();
+            return;
+        }
+
         SetHoverIndex(_model.RootFolderPath is null ? -1 : IndexAtGridPosition(ToContent(e.Location)) ?? -1);
-        UpdateButtonTooltip(e.Location);
+        // Clear Folder/Delete Folder Fence's own hover tooltip is LayeredWidgetForm's own now (see
+        // ExtraButtons) - base.OnMouseMove above already ran UpdateButtonHover.
+    }
+
+    /// <summary>Live drop-target hint for a grid item drag (see _draggingIndex), shown in the pill
+    /// below the drag ghost - mirrors FenceForm's own ComputeDragHint, minus every same-fence case
+    /// (nothing here is reorderable) and minus its own "Remove from Fence" fallback (a folder
+    /// fence's own contents are never removable by dragging - see the class's own doc comment).
+    /// Checks ordinary fences first, then other folder fences - a screen point can only ever land on
+    /// one live widget at a time, so the order between the two only matters in the (never actually
+    /// possible in practice) case of two fences occupying the exact same screen space.</summary>
+    private string? ComputeDragHint(Point windowLocation)
+    {
+        if (_draggingIndex is not int sourceIndex)
+            return null;
+
+        var screenPoint = PointToScreen(windowLocation);
+        if (_fences.FindFenceAt(screenPoint, _model.Id) is { } targetForm)
+        {
+            // Same rule OnMouseUp itself applies (see there) - a subfolder dropped on a currently
+            // empty fence converts it instead of adding an ordinary shortcut.
+            if (_entries[sourceIndex].IsDirectory && targetForm.IsEmpty)
+                return "Convert to Folder Fence";
+
+            var targetIndex = targetForm.IndexForExternalDrop(screenPoint);
+            return _fences.IsRecycleBinAt(targetForm.FenceId, targetIndex)
+                ? "Move to Recycle Bin"
+                : $"Add to {targetForm.FenceName}";
+        }
+
+        // A folder fence never accepts anything but a single subfolder, and only while it's still
+        // empty - same rule an OLE drop onto one already follows (see OnDragEnter/OnDragDrop) -
+        // there's no equivalent of the ordinary-fence branch's "Add to"/"Move to Recycle Bin" cases
+        // here, a populated target or a plain file just isn't a valid drop anywhere on it.
+        if (_entries[sourceIndex].IsDirectory
+            && _manager.FindFolderFenceAt(screenPoint, _model.Id) is { IsEmpty: true } targetFolderFence)
+            return $"Connect to {targetFolderFence.FolderFenceName}";
+
+        return null;
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -533,7 +681,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         if (_backButtonArmed)
         {
             _backButtonArmed = false;
-            if (_currentSubPath is not null && !_model.HideHeader && HeaderClickableRect(contentSize.Width).Contains(contentPoint))
+            if (_currentSubPath is not null && TitleVisible && HeaderClickableRect(contentSize.Width).Contains(contentPoint))
                 NavigateUp();
             return;
         }
@@ -546,7 +694,6 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             return;
         }
 
-        FireArmedCopySettingsButton(contentPoint);
         FireArmedExtraButton(contentPoint);
 
         if (_scrollbar.EndDrag())
@@ -560,7 +707,57 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             _plusButtonArmed = false;
             if (EmptyStatePlusRect(contentSize).Contains(contentPoint))
                 BrowseForFolder();
+            return;
         }
+
+        _dragArmIndex = null;
+        if (_draggingIndex is not int sourceIndex)
+            return;
+
+        Capture = false;
+        _draggingIndex = null;
+        _dragGhost?.Dispose();
+        _dragGhost = null;
+
+        var entry = _entries[sourceIndex];
+        var screenPoint = PointToScreen(e.Location);
+        if (_fences.FindFenceAt(screenPoint, _model.Id) is { } targetForm)
+        {
+            // A subfolder dropped on a currently empty fence converts it into a folder fence
+            // instead of adding an ordinary shortcut - same rule/mechanism an OLE folder drop onto
+            // an empty fence already follows (see FenceForm.IsFolderConversionDrop/
+            // FolderDroppedOnEmptyFence), just triggered from here since this drag never goes
+            // through OnDragDrop at all. TakeForConversion re-checks emptiness itself (this fence
+            // could have stopped being empty since the hint was last computed) and returns null if
+            // it no longer qualifies, in which case this just falls through to an ordinary add below.
+            if (entry.IsDirectory && _fences.TakeForConversion(targetForm.FenceId) is { } source)
+            {
+                _manager.ConvertFromFence(source, entry.Path);
+            }
+            else
+            {
+                var targetIndex = targetForm.IndexForExternalDrop(screenPoint);
+                if (_fences.IsRecycleBinAt(targetForm.FenceId, targetIndex))
+                    _fences.DeletePaths(new[] { entry.Path }, Handle);
+                else
+                    _fences.AddFiles(targetForm.FenceId, new[] { entry.Path });
+            }
+        }
+        // A subfolder dropped on a different, still-empty folder fence connects it - same rule/
+        // mechanism an OLE folder drop onto one already follows (see OnDragEnter/OnDragDrop), just
+        // triggered from here since this drag never goes through OnDragDrop at all. Re-checks
+        // IsEmpty itself (that fence could have stopped being empty since the hint was last
+        // computed) rather than trusting ComputeDragHint's own earlier read of it.
+        else if (entry.IsDirectory && _manager.FindFolderFenceAt(screenPoint, _model.Id) is { IsEmpty: true } targetFolderFence)
+        {
+            targetFolderFence.ConnectFolder(entry.Path);
+        }
+        // Landing anywhere else (empty desktop, back over this same fence, a populated folder fence,
+        // a plain file over any folder fence) just cancels the drag - see this widget's own drag
+        // fields' doc comment for why there's no "remove"/"reorder" case to fall back to here the
+        // way FenceForm's own OnMouseUp has.
+
+        RenderAndPresent();
     }
 
     protected override void OnMouseDoubleClick(MouseEventArgs e)
@@ -591,8 +788,6 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     {
         base.OnMouseLeave(e);
         SetHoverIndex(-1);
-        if (_buttonTooltip.Hide())
-            RenderAndPresent();
     }
 
     protected override void OnClientRightClick(Point contentPoint)
@@ -613,45 +808,26 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         RenderAndPresent();
     }
 
-    /// <summary>Shows/hides the "Clear Folder"/"Delete Folder Fence" tooltip over the "−"/"×"
-    /// buttons - same PaintedTooltip approach as FenceForm's own UpdateButtonTooltips, just against
-    /// ExtraButtons' own rects instead of hand-rolled ones.</summary>
-    private void UpdateButtonTooltip(Point windowLocation)
-    {
-        var contentSize = GetContentSize();
-        var contentPoint = ToContent(windowLocation);
-        var onLeft = ShouldSettingsButtonOpenLeft(contentSize.Width);
-
-        string? text = null;
-        var rect = Rectangle.Empty;
-        if (ShowsButtons)
-        {
-            var clearRect = GetExtraButtonRect(contentSize.Width, onLeft, 0);
-            var deleteRect = GetExtraButtonRect(contentSize.Width, onLeft, 1);
-            if (clearRect.Contains(contentPoint))
-            {
-                text = "Clear Folder";
-                rect = clearRect;
-            }
-            else if (deleteRect.Contains(contentPoint))
-            {
-                text = "Delete Folder Fence";
-                rect = deleteRect;
-            }
-        }
-
-        var changed = text is not null ? _buttonTooltip.Show(text, ToWindow(rect)) : _buttonTooltip.Hide();
-        if (changed)
-            RenderAndPresent();
-    }
-
+    /// <summary>Square, centered in the space below the header/tab - shrinks below its own default
+    /// EmptyStatePlusSize (rather than the old fixed size regardless of available room) once a fence
+    /// dragged short enough no longer has that much vertical space to give it, the same re-clamped-
+    /// floor-to-ceiling approach GetTabWidth uses for the same reason: without this, the glyph used
+    /// to keep its full fixed size and get pushed up out of its own area into the header - Math.Min
+    /// against contentSize.Width too, so an equally narrow (rather than short) fence can't push it
+    /// past the left/right edges either. Centered within the same GridTop+GridPadding-to-
+    /// contentHeight-GridPadding area the real item grid itself occupies (see GetMaxScroll/
+    /// FormatDimensions' own identical top/bottom padding), not the bare unpadded region below the
+    /// header - besides matching the real grid's own margins, this also keeps a real gap above the
+    /// glyph at any size, rather than it ever sitting flush against the header's own bottom edge.</summary>
     private Rectangle EmptyStatePlusRect(Size contentSize)
     {
-        var top = GridTop;
-        var areaHeight = Math.Max(0, contentSize.Height - top);
+        var top = GridTop + GridPadding;
+        var areaHeight = Math.Max(0, contentSize.Height - top - GridPadding);
+        var maxSize = Math.Max(0, Math.Min(areaHeight, contentSize.Width));
+        var size = Math.Clamp(EmptyStatePlusSize, Math.Min(MinEmptyStatePlusSize, maxSize), maxSize);
         return new Rectangle(
-            (contentSize.Width - EmptyStatePlusSize) / 2, top + (areaHeight - EmptyStatePlusSize) / 2,
-            EmptyStatePlusSize, EmptyStatePlusSize);
+            (contentSize.Width - size) / 2, top + (areaHeight - size) / 2,
+            size, size);
     }
 
     private void BrowseForFolder()
@@ -669,6 +845,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         var isFirstAssignment = _model.RootFolderPath is null;
         _model.RootFolderPath = path;
         _currentSubPath = null;
+        _model.CurrentSubPath = null;
         if (isFirstAssignment)
         {
             var name = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
@@ -686,6 +863,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             return;
         _model.RootFolderPath = null;
         _currentSubPath = null;
+        _model.CurrentSubPath = null;
         _watcher?.Dispose();
         _watcher = null;
         _entries.Clear();
@@ -708,6 +886,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     private void NavigateInto(string path)
     {
         _currentSubPath = Path.GetRelativePath(_model.RootFolderPath!, path);
+        _model.CurrentSubPath = _currentSubPath;
+        _manager.Save();
         _scrollbar.Offset = 0;
         RestartWatcher();
         RefreshEntries();
@@ -720,6 +900,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             return;
         var parent = Path.GetDirectoryName(_currentSubPath);
         _currentSubPath = string.IsNullOrEmpty(parent) ? null : parent;
+        _model.CurrentSubPath = _currentSubPath;
+        _manager.Save();
         _scrollbar.Offset = 0;
         RestartWatcher();
         RefreshEntries();
@@ -909,28 +1091,35 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     protected override int TitleRowHeight => TitleBarHeight;
 
-    // Hide Header would leave the folder tab (see PaintFolderTab) with nothing to attach to - it
-    // already falls back gracefully to a plain header if HideHeader were ever true (see
-    // GetBodyOutlinePath's own !TitleVisible check), but there's no reason to offer turning it on
-    // in the first place. Light Border strokes just the header on its own, independent of the tab -
-    // an odd combination now that the header's own outline is only ever part of the wider tab+body
-    // silhouette (see GetBodyOutlinePath), not a standalone shape worth bordering by itself. Corner
-    // Radius capped lower than the base's own 50 - the tab/diagonal proportions (see GetTabWidth/
-    // TabExtraHeight) are sized for a more modest range; a much larger radius starts to visibly
-    // outgrow them.
+    // Hide Header would leave the folder tab (see PaintFolderTab) with nothing to attach to, so
+    // there's no reason to offer turning it on - see the HideHeader override below, which also
+    // makes sure it can never actually get turned on some other way (Copy Settings To from an
+    // ordinary fence, this widget's own fence-to-folder-fence conversion, hand-edited JSON) either.
+    // Light Border strokes just the header on its own, independent of the tab - an odd combination
+    // now that the header's own outline is only ever part of the wider tab+body silhouette (see
+    // GetBodyOutlinePath), not a standalone shape worth bordering by itself; unlike HideHeader, this
+    // one needs no equivalent override - PaintChrome's own Light Border stroke is already gated on
+    // ShowLightBorderOption itself (see that property's own doc comment), so a leaked
+    // Style.LightBorder = true from any of those same sources just never renders, regardless of what
+    // the model holds. Corner Radius capped lower than the base's own 50 - the tab/diagonal
+    // proportions (see GetTabWidth/TabExtraHeight) are sized for a more modest range; a much larger
+    // radius starts to visibly outgrow them.
     protected override bool ShowHideHeaderOption => false;
     protected override bool ShowLightBorderOption => false;
     protected override int CornerRadiusMax => 20;
 
+    /// <summary>Forced off rather than merely defaulted off - unlike Light Border (see
+    /// ShowLightBorderOption's own comment), HideHeader drives TitleVisible directly with no
+    /// equivalent ShowHideHeaderOption gate anywhere in PaintChrome, so a leaked true would actually
+    /// hide the header (tab included, see GetBodyOutlinePath's own !TitleVisible fallback) rather
+    /// than just losing its menu row. Ignoring both the read (always false, regardless of whatever
+    /// _model.HideHeader itself holds - including a pre-existing true left over on disk from before
+    /// this override existed) and the write keeps this setting genuinely inert for a folder fence,
+    /// rather than relying on every caller that might set HideHeader to know to skip it.</summary>
     protected override bool HideHeader
     {
-        get => _model.HideHeader;
-        set
-        {
-            _model.HideHeader = value;
-            _manager.Save();
-            RenderAndPresent();
-        }
+        get => false;
+        set { }
     }
 
     protected override bool ShowHeaderCloseButton
@@ -1060,6 +1249,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         _watcher?.Dispose();
         _refreshTimer.Dispose();
         _itemContextMenu?.Dispose();
+        _dragGhost?.Dispose();
         foreach (var icon in _iconCache.Values)
             icon?.Dispose();
     }
@@ -1120,6 +1310,13 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         return icon;
     }
 
+    private static void DrawImageWithOpacity(Graphics g, Image image, Rectangle rect, float opacity)
+    {
+        using var attributes = new ImageAttributes();
+        attributes.SetColorMatrix(new ColorMatrix { Matrix33 = opacity }, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+        g.DrawImage(image, rect, 0, 0, image.Width, image.Height, GraphicsUnit.Pixel, attributes);
+    }
+
     private static string GetDisplayName(GridEntry entry) =>
         entry.IsDirectory ? Path.GetFileName(entry.Path) : Path.GetFileNameWithoutExtension(entry.Path);
 
@@ -1127,10 +1324,10 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     {
         _scrollbar.ClampToMax(GetMaxScroll(contentWidth, contentHeight));
 
-        // Body/title fill (tab included - see GetHeaderFillPath), border, title text, and the
-        // Settings/Copy Settings/"−"/"×" buttons are all LayeredWidgetForm's own - this only draws
-        // what's genuinely folder-fence-specific: the empty-state "+" or the item grid, plus the
-        // "−"/"×" hover tooltip on top of everything.
+        // Body/title fill (tab included - see GetHeaderFillPath), border, title text, the
+        // Settings/Copy Settings/"−"/"×" buttons, and their own hover tooltip are all
+        // LayeredWidgetForm's own - this only draws what's genuinely folder-fence-specific: the
+        // empty-state "+" or the item grid.
         PaintChrome(g, contentWidth, contentHeight);
 
         if (_currentSubPath is not null && TitleVisible)
@@ -1140,21 +1337,24 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             PaintEmptyState(g, contentWidth, contentHeight);
         else
             PaintItems(g, contentWidth, contentHeight);
-
-        _buttonTooltip.Paint(g, Font, SettingsMenuTooltipColor, ToWindow(new Rectangle(0, 0, contentWidth, contentHeight)),
-            Style.HeaderBorderMode ? ThemedTitle : null);
     }
 
+    /// <summary>Pen width/inset both scale off the glyph's own current rect (see EmptyStatePlusRect)
+    /// rather than being fixed - a fixed 3px/6px pair sized for the old fixed 64px box read as
+    /// thick/blurry once EmptyStatePlusSize shrank to 40, and would only get worse still on a fence
+    /// small enough to shrink the rect itself further.</summary>
     private void PaintEmptyState(Graphics g, int contentWidth, int contentHeight)
     {
         var rect = ToWindow(EmptyStatePlusRect(new Size(contentWidth, contentHeight)));
         var cx = rect.X + rect.Width / 2f;
         var cy = rect.Y + rect.Height / 2f;
-        var half = rect.Width / 2f - 6;
+        var inset = Math.Min(6f, rect.Width * 0.15f);
+        var half = rect.Width / 2f - inset;
+        var penWidth = Math.Clamp(rect.Width * 0.06f, 1.5f, 3f);
 
         var previousSmoothing = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var pen = new Pen(Color.FromArgb(160, 255, 255, 255), 3f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+        using (var pen = new Pen(Color.FromArgb(160, 255, 255, 255), penWidth) { StartCap = LineCap.Round, EndCap = LineCap.Round })
         {
             g.DrawLine(pen, cx - half, cy, cx + half, cy);
             g.DrawLine(pen, cx, cy - half, cx, cy + half);
@@ -1173,6 +1373,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         for (int i = 0; i < _entries.Count; i++)
         {
             var entry = _entries[i];
+            var isDragSource = i == _draggingIndex;
             var column = i % columns;
             var row = i / columns;
             var cellX = GridPadding + column * CellWidth;
@@ -1181,7 +1382,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             if (cellY + EffectiveCellHeight <= GridTop || cellY >= height)
                 continue;
 
-            if (i == _hoverIndex)
+            if (i == _hoverIndex && !isDragSource)
             {
                 using var hoverBrush = new SolidBrush(Color.FromArgb(60, 255, 255, 255));
                 using var hoverPath = RoundedRectPath.Full(ToWindow(new Rectangle(cellX, cellY, CellWidth, EffectiveCellHeight)), 4);
@@ -1193,7 +1394,13 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             if (GetIcon(entry.Path) is { } icon)
             {
                 using var bitmap = icon.ToBitmap();
-                g.DrawImage(bitmap, iconRect);
+                // Faded in place while it's being dragged - the ghost near the cursor (see
+                // OnMouseMove) is what's actually "held", same treatment as FenceForm's own
+                // DrawImageWithOpacity.
+                if (isDragSource)
+                    DrawImageWithOpacity(g, bitmap, iconRect, 0.35f);
+                else
+                    g.DrawImage(bitmap, iconRect);
             }
 
             if (_model.HideLabels)

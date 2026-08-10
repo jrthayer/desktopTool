@@ -45,17 +45,15 @@ internal sealed class PaintedTooltip
         return true;
     }
 
-    /// <summary>Paints the pill, anchored just below targetRect by default and flipped to just above
-    /// it when that would run past bounds.Bottom - bounds is whatever area the caller's own content
-    /// is limited to (a widget's own content size, say). A no-op while not visible. borderColor is
-    /// null by default, meaning no border is drawn at all - a caller with its own notion of when a
-    /// border should show (a LayeredWidgetForm's own Header Border Mode, say) passes one only when it
-    /// actually wants one right now; this class has no concept of that itself, by design (see its own
-    /// class comment on staying dependency-free).</summary>
-    public void Paint(Graphics g, Font font, Color background, Rectangle bounds, Color? borderColor = null)
+    /// <summary>Where the pill would paint, given the same font/bounds Paint itself would use - null
+    /// while not visible. Pulled out of Paint so a caller can also use this alone, without actually
+    /// painting - a LayeredWidgetForm's own GetFullOpacityRegions calls this to know which rect needs
+    /// exempting from Style.Opacity's own fade, since this tooltip belongs to a bar button that's
+    /// already exempted the same way and shouldn't visibly wash out while that button doesn't.</summary>
+    public Rectangle? GetPillRect(Font font, Rectangle bounds)
     {
         if (_text is not { } text)
-            return;
+            return null;
 
         var textWidth = TextRenderer.MeasureText(text, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
         var width = textWidth + PaddingX * 2;
@@ -65,7 +63,21 @@ internal sealed class PaintedTooltip
         var y = below + Height <= bounds.Bottom ? below : _targetRect.Top - Gap - Height;
         y = Math.Clamp(y, bounds.Y, Math.Max(bounds.Y, bounds.Bottom - Height));
 
-        var pillRect = new Rectangle(x, y, width, Height);
+        return new Rectangle(x, y, width, Height);
+    }
+
+    /// <summary>Paints the pill, anchored just below targetRect by default and flipped to just above
+    /// it when that would run past bounds.Bottom - bounds is whatever area the caller's own content
+    /// is limited to (a widget's own content size, say). A no-op while not visible. borderColor is
+    /// null by default, meaning no border is drawn at all - a caller with its own notion of when a
+    /// border should show (a LayeredWidgetForm's own Header Border Mode, say) passes one only when it
+    /// actually wants one right now; this class has no concept of that itself, by design (see its own
+    /// class comment on staying dependency-free).</summary>
+    public void Paint(Graphics g, Font font, Color background, Rectangle bounds, Color? borderColor = null)
+    {
+        if (_text is not { } text || GetPillRect(font, bounds) is not { } pillRect)
+            return;
+
         using (var pillPath = RoundedRectPath.Full(pillRect, 6))
         using (var pillFill = new SolidBrush(background))
         {

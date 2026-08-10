@@ -98,11 +98,6 @@ internal sealed class FenceForm : LayeredWidgetForm
     private const int CmdResizeLeftRight = 10;
     private const int CmdResizeTopDown = 11;
     private const int CmdToggleOcdSizing = 12;
-    // Only ever shown while ButtonBandIsTight (see BuildAdditionalSettingsRows) - the same "+"/"x"
-    // actions the hand-drawn buttons give a wider fence, relocated here rather than lost when there's
-    // no room for those buttons.
-    private const int CmdCopyFence = 13;
-    private const int CmdDeleteFence = 14;
 
     // Not a real WM_COMMAND id - just this row's own Row.Id value for the non-clickable "Fence
     // Dimensions" section header inside the OCD flyout (see BuildAdditionalSettingsRows;
@@ -119,11 +114,9 @@ internal sealed class FenceForm : LayeredWidgetForm
     // SettingsButtonGap (the vertical gap between the button row's bottom edge and the fence's own
     // top edge) is LayeredWidgetForm's own default (6) now, unchanged from what this used to declare
     // itself - TopMargin's own extra room above OuterMargin is still sized for it.
-    // Shared size for the "+" (copy-this-fence's-settings) and "x" (delete-fence) buttons - both
-    // square, same height as Settings, and chained immediately adjacent to it and each other (see
-    // GetNewFenceButtonRect/GetDeleteButtonRect) rather than anchored to their own corners.
+    // Copy Fence/Delete Fence's own square footprint (see ExtraButtons below) - same height Settings
+    // itself already uses.
     private const int SmallButtonSize = 22;
-    private const int ButtonSpacing = 4;
 
     private readonly FenceManager _manager;
     private readonly FenceModel _model;
@@ -159,21 +152,41 @@ internal sealed class FenceForm : LayeredWidgetForm
     // this button's history - opening the dropdown while the mouse button is still physically down
     // raced with TrackPopupMenuEx's own capture and made it flash open and closed.
     private bool _settingsButtonArmed;
-    // Same arm-then-fire pattern as _settingsButtonArmed above, for the "+"/"x" buttons next to it.
-    private bool _newFenceButtonArmed;
-    private bool _deleteButtonArmed;
-    // "Copy Fence"/"Delete Fence" over the "+"/"x" buttons - PaintedTooltip (DesktopTool.UI), hand-
-    // painted directly into this same bitmap rather than a native System.Windows.Forms.ToolTip (that
-    // control's own fade-in animation kept painting its default, non-themed look for a frame before
-    // OwnerDraw's content replaced it - not fully suppressible even with ShowAlways/UseAnimation/
-    // UseFading all set, see Layout Launcher's own history with it).
-    private readonly PaintedTooltip _buttonTooltip = new();
+    // Copy Fence/Delete Fence are LayeredWidgetForm's own ExtraButtons now (see the constructor) -
+    // TryArmExtraButton/FireArmedExtraButton handle their own arm-then-fire and hover tooltip, so
+    // there's no fence-owned arm flag or tooltip field left to keep here.
 
     // Whether the drag that's about to start is a resize (as opposed to a move) - LayeredWidgetForm's
     // own IsResizing now (set from OnNcLButtonDown's own base default); read back on OnDragEnd to
     // decide whether OcdFenceSizing should auto-run "Both" now that the resize is done.
 
     public Guid FenceId => _model.Id;
+
+    /// <summary>Copy Fence (the same two-squares "duplicate" glyph Copy Settings itself used to use -
+    /// see LayeredWidgetForm.PaintCopyIconGlyph, a much more literal fit for "duplicate" than the
+    /// eyedropper that button has now)/Delete Fence ("x", crossed diagonals - see
+    /// PaintDeleteFenceGlyph) - LayeredWidgetForm's own ChromeButton mechanism instead of this
+    /// fence's former hand-rolled rect-chaining/paint/hit-test/arm-fire/tight-band code, with a
+    /// custom PaintGlyph each since neither reads well as a single text character the way every
+    /// other widget's own ChromeButtons do. Declared in this order (Copy Fence closest to Copy
+    /// Settings, Delete Fence outermost) so on a narrowing fence Delete drops off the bar into the
+    /// Settings dropdown first, Copy only once there's no longer room for either (see
+    /// VisibleExtraButtonCount) - same reach either way, just relocated.</summary>
+    protected override IReadOnlyList<ChromeButton> ExtraButtons { get; }
+
+    /// <summary>Fired instead of adding the item, when a single folder gets dropped onto this fence
+    /// while it's completely empty - see OnDragDrop. FenceManager forwards this up to
+    /// TrayApplicationContext (the one place that already holds both FenceManager and
+    /// FolderFenceManager - see FolderFenceManager's own constructor comment on why that dependency
+    /// only runs one way), which actually performs the conversion into a Folder Fence.</summary>
+    public event EventHandler<string>? FolderDroppedOnEmptyFence;
+
+    /// <summary>Whether this fence currently holds no items at all - used by FolderFenceForm's own
+    /// cross-fence item drag (see its own ComputeDragHint/OnMouseUp) to know a subfolder dropped
+    /// here would convert this fence into a folder fence instead of just adding an ordinary
+    /// shortcut - the same rule an OLE folder drop already follows (see IsFolderConversionDrop),
+    /// just checked from outside this class since that drag never goes through OnDragDrop at all.</summary>
+    internal bool IsEmpty => _model.Files.Count == 0;
 
     /// <summary>Runs OCD Fence Sizing's own fit-to-content once, immediately - same call
     /// ToggleOcdFenceSizing itself makes when turning the setting on, but for a fence created with
@@ -279,6 +292,12 @@ internal sealed class FenceForm : LayeredWidgetForm
         _manager = manager;
         _anchorStrategy = anchorStrategy;
 
+        ExtraButtons = new List<ChromeButton>
+        {
+            new("+", SmallButtonSize, () => _manager.CreateFenceLike(FenceId), "Copy Fence", PaintCopyIconGlyph),
+            new("×", SmallButtonSize, ConfirmDelete, "Delete Fence", PaintDeleteFenceGlyph),
+        };
+
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
@@ -336,55 +355,6 @@ internal sealed class FenceForm : LayeredWidgetForm
         return Math.Max(0, rows * EffectiveCellHeight - availableHeight);
     }
 
-    /// <summary>Whether contentWidth has room for the full Settings-through-Delete button chain
-    /// (Settings, Copy Settings To, "+", "x" - see GetDeleteButtonRect's own "outermost... innermost"
-    /// comment) without its innermost buttons sliding past the window's own edge. A fence is allowed
-    /// to be narrower than this on purpose (a single-icon Fence Trash Can-style wrap, say) - rather
-    /// than forcing it wider just to fit two buttons it rarely needs, "+"/"x" simply stop being
-    /// hand-drawn buttons below this width and become "Copy Fence"/"Delete Fence" rows in the
-    /// Settings dropdown instead (see BuildAdditionalSettingsRows) - same actions, same reach, just
-    /// relocated rather than lost.</summary>
-    private bool ButtonBandIsTight(int contentWidth) =>
-        contentWidth < SettingsButtonWidth + SettingsButtonGap + CopySettingsButtonWidth + ButtonSpacing * 2 + SmallButtonSize * 2;
-
-    /// <summary>Immediately inside the Copy Settings button (i.e. between it and the fence body)
-    /// rather than anchored to its own corner - moves and flips sides together with
-    /// LayeredWidgetForm's own GetCopySettingsButtonRect as a pair, always adjacent to it (which is
-    /// itself always adjacent to Settings - see that method's own comment). Duplicates this fence's
-    /// settings into a new, empty fence (see FenceManager.CreateFenceLike) when clicked. Only
-    /// meaningful while !ButtonBandIsTight - every caller already guards on that first.</summary>
-    private Rectangle GetNewFenceButtonRect(int contentWidth, bool onLeft)
-    {
-        var settingsRect = GetCopySettingsButtonRect(contentWidth, onLeft);
-        var x = onLeft ? settingsRect.Right + ButtonSpacing : settingsRect.X - ButtonSpacing - SmallButtonSize;
-        return new Rectangle(x, settingsRect.Y, SmallButtonSize, SettingsButtonHeight);
-    }
-
-    /// <summary>Chained off GetNewFenceButtonRect the same way that one chains off
-    /// GetSettingsButtonRect - the three buttons move/flip together as one group, always in the same
-    /// relative order (Settings outermost, then "+", then this one, innermost/closest to the fence
-    /// body). Deletes the fence (with confirmation - see ConfirmDelete) when clicked; this replaces
-    /// "Delete Fence" as a row inside the settings dropdown, which no longer has one.</summary>
-    private Rectangle GetDeleteButtonRect(int contentWidth, bool onLeft)
-    {
-        var newFenceRect = GetNewFenceButtonRect(contentWidth, onLeft);
-        var x = onLeft ? newFenceRect.Right + ButtonSpacing : newFenceRect.X - ButtonSpacing - SmallButtonSize;
-        return new Rectangle(x, newFenceRect.Y, SmallButtonSize, SettingsButtonHeight);
-    }
-
-    /// <summary>Copy Fence/Delete Fence aren't ChromeButtons (they need their own hand-drawn glyphs -
-    /// see PaintChrome's own comment on why), so they need their own opt-in here to get the same
-    /// "always fully visible regardless of Style.Opacity" treatment Settings already gets for free.</summary>
-    protected override IEnumerable<Rectangle> AdditionalFullOpacityRegions(int contentWidth)
-    {
-        if (ButtonBandIsTight(contentWidth))
-            yield break;
-
-        var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
-        yield return ToWindow(GetNewFenceButtonRect(contentWidth, onLeft));
-        yield return ToWindow(GetDeleteButtonRect(contentWidth, onLeft));
-    }
-
     /// <summary>The scrollbar's own viewport - Scrollbar.GetGeometry only reads Right/Top/Height off
     /// this (a scrollbar always hugs the right edge of whatever it's given), so Left/Width beyond
     /// contentWidth itself don't matter here.</summary>
@@ -424,14 +394,29 @@ internal sealed class FenceForm : LayeredWidgetForm
 
     protected override void OnDragEnter(DragEventArgs e)
     {
-        if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
-            e.Effect = DragDropEffects.Move;
+        if (e.Data?.GetData(DataFormats.FileDrop) is not string[] paths)
+            return;
+
+        // Link (rather than the plain Move every other drop onto this fence shows) whenever this
+        // drop would turn into a Folder Fence conversion instead of an ordinary add - same cue
+        // FolderFenceForm's own empty "+" state gives for the identical single-folder-onto-empty
+        // case, so the cursor already hints at the different outcome before the drop lands.
+        e.Effect = IsFolderConversionDrop(paths) ? DragDropEffects.Link : DragDropEffects.Move;
     }
+
+    private bool IsFolderConversionDrop(string[] paths) =>
+        _model.Files.Count == 0 && paths is { Length: 1 } && Directory.Exists(paths[0]);
 
     protected override void OnDragDrop(DragEventArgs e)
     {
         if (e.Data?.GetData(DataFormats.FileDrop) is not string[] paths)
             return;
+
+        if (IsFolderConversionDrop(paths))
+        {
+            FolderDroppedOnEmptyFence?.Invoke(this, paths[0]);
+            return;
+        }
 
         // e.X/e.Y are screen coordinates (unlike MouseEventArgs.Location) - PointToClient first to
         // land in the same window-relative space ToContent/IndexAtGridPosition expect elsewhere.
@@ -479,20 +464,8 @@ internal sealed class FenceForm : LayeredWidgetForm
             return;
         }
 
-        if (ShowsButtons && TryArmCopySettingsButton(contentPoint))
+        if (ShowsButtons && TryArmExtraButton(contentPoint))
             return;
-
-        if (ShowsButtons && !ButtonBandIsTight(contentSize.Width) && GetNewFenceButtonRect(contentSize.Width, onLeft).Contains(contentPoint))
-        {
-            _newFenceButtonArmed = true;
-            return;
-        }
-
-        if (ShowsButtons && !ButtonBandIsTight(contentSize.Width) && GetDeleteButtonRect(contentSize.Width, onLeft).Contains(contentPoint))
-        {
-            _deleteButtonArmed = true;
-            return;
-        }
 
         if (_scrollbar.TryHandleMouseDown(contentPoint, GridViewport(contentSize.Width, contentSize.Height),
                 GetMaxScroll(contentSize.Width, contentSize.Height), EffectiveCellHeight))
@@ -553,43 +526,9 @@ internal sealed class FenceForm : LayeredWidgetForm
         }
 
         SetHoverIndex(IndexAtGridPosition(ToContent(e.Location)) ?? -1);
-        UpdateButtonTooltips(e.Location);
-    }
-
-    /// <summary>Shows/hides the "Copy Fence"/"Delete Fence" tooltip over the "+"/"x" buttons via the
-    /// shared PaintedTooltip - only meaningful while they're actually visible (ShowsButtons).
-    /// PaintedTooltip.Show/Hide already report whether anything actually changed, so this only
-    /// repaints when it did, rather than on every mouse-move. Target rects are converted to window-
-    /// space (via ToWindow) before reaching PaintedTooltip, since that class does no space conversion
-    /// of its own.</summary>
-    private void UpdateButtonTooltips(Point windowLocation)
-    {
-        var contentSize = GetContentSize();
-        var contentPoint = ToContent(windowLocation);
-        var onLeft = ShouldSettingsButtonOpenLeft(contentSize.Width);
-
-        string? text = null;
-        Rectangle buttonRect = default;
-        if (ShowsButtons && !ButtonBandIsTight(contentSize.Width))
-        {
-            if (GetNewFenceButtonRect(contentSize.Width, onLeft) is var newFenceRect && newFenceRect.Contains(contentPoint))
-            {
-                text = "Copy Fence";
-                buttonRect = newFenceRect;
-            }
-            else if (GetDeleteButtonRect(contentSize.Width, onLeft) is var deleteRect && deleteRect.Contains(contentPoint))
-            {
-                text = "Delete Fence";
-                buttonRect = deleteRect;
-            }
-        }
-
-        var changed = text is not null
-            ? _buttonTooltip.Show(text, ToWindow(buttonRect))
-            : _buttonTooltip.Hide();
-
-        if (changed)
-            RenderAndPresent();
+        // Copy Fence/Delete Fence's own hover tint/tooltip are LayeredWidgetForm's own now (see
+        // ExtraButtons) - base.OnMouseMove above already ran UpdateButtonHover, so there's nothing
+        // left for this override to do for them.
     }
 
     /// <summary>Live drop-target hint for an in-app item drag (see _draggingIndex), shown in the
@@ -650,23 +589,7 @@ internal sealed class FenceForm : LayeredWidgetForm
             return;
         }
 
-        FireArmedCopySettingsButton(ToContent(e.Location));
-
-        if (_newFenceButtonArmed)
-        {
-            _newFenceButtonArmed = false;
-            if (ShowsButtons && GetNewFenceButtonRect(GetContentSize().Width, onLeft).Contains(ToContent(e.Location)))
-                _manager.CreateFenceLike(FenceId);
-            return;
-        }
-
-        if (_deleteButtonArmed)
-        {
-            _deleteButtonArmed = false;
-            if (ShowsButtons && GetDeleteButtonRect(GetContentSize().Width, onLeft).Contains(ToContent(e.Location)))
-                ConfirmDelete();
-            return;
-        }
+        FireArmedExtraButton(ToContent(e.Location));
 
         if (_scrollbar.EndDrag())
         {
@@ -729,14 +652,13 @@ internal sealed class FenceForm : LayeredWidgetForm
     }
 
     // OnMouseEnter needs no override of its own anymore - LayeredWidgetForm's own already does
-    // exactly what this used to (track client-area hover, begin easing opacity). OnMouseLeave still
-    // needs one, for the two things below on top of that same base behavior.
+    // exactly what this used to (track client-area hover, begin easing opacity, and - now that Copy
+    // Fence/Delete Fence are ExtraButtons - hide their own hover tooltip too). OnMouseLeave still
+    // needs one, just for this fence's own icon-grid hover below.
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
         SetHoverIndex(-1);
-        if (_buttonTooltip.Hide())
-            RenderAndPresent();
     }
 
     private void SetHoverIndex(int index)
@@ -836,9 +758,7 @@ internal sealed class FenceForm : LayeredWidgetForm
         var contentPoint = ToContent(windowPoint);
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
         if (ShowsButtons && (GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
-            || GetCopySettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
-            || (!ButtonBandIsTight(contentWidth) && (GetNewFenceButtonRect(contentWidth, onLeft).Contains(contentPoint)
-                || GetDeleteButtonRect(contentWidth, onLeft).Contains(contentPoint)))))
+            || TryGetExtraButtonAt(contentWidth, onLeft, contentPoint, out _)))
             return HTCLIENT;
 
         // Not gated by ShowsButtons, unlike every check above - see IsOverHeaderCloseButton's own
@@ -890,54 +810,26 @@ internal sealed class FenceForm : LayeredWidgetForm
     protected override void PaintContent(Graphics g, int contentWidth, int contentHeight)
     {
         _scrollbar.ClampToMax(GetMaxScroll(contentWidth, contentHeight));
-        var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
 
-        // Body/title fill, border, title text, and the Settings button itself are all
-        // LayeredWidgetForm's own now - this only draws what's genuinely fence-specific: the "+"/"x"
-        // buttons chained off Settings, and the item grid (see PaintItems).
+        // Body/title fill, border, title text, the Settings button, and Copy Fence/Delete Fence
+        // (LayeredWidgetForm's own ExtraButtons now - see PaintExtraButtons/ChromeButton.PaintGlyph)
+        // are all LayeredWidgetForm's own now - this only draws what's genuinely fence-specific: the
+        // item grid (see PaintItems).
         PaintChrome(g, contentWidth, contentHeight);
-
-        if (ShowsButtons && !ButtonBandIsTight(contentWidth))
-        {
-            // Same opaque-backing reasoning as PaintChrome's own Settings button - filled before the
-            // copy glyph is stroked on top (see MarginFillColor's own comment).
-            var newFenceRect = ToWindow(GetNewFenceButtonRect(contentWidth, onLeft));
-            using var newFencePath = RoundedRect(newFenceRect, 6);
-            using var newFenceFill = new SolidBrush(ChromeFill);
-            g.FillPath(newFenceFill, newFencePath);
-            PaintHeaderBorderModeOutline(g, newFencePath);
-
-            // A plain cross - same hand-drawn construction as WidgetManagerWidget's own "Add Fence"
-            // PaintPlusGlyph, sized to this button instead of that one's row-button footprint.
-            var cx = newFenceRect.X + newFenceRect.Width / 2f;
-            var cy = newFenceRect.Y + newFenceRect.Height / 2f;
-            const float half = 4.5f;
-            using var plusPen = new Pen(Color.WhiteSmoke, 1.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            g.DrawLine(plusPen, cx - half, cy, cx + half, cy);
-            g.DrawLine(plusPen, cx, cy - half, cx, cy + half);
-
-            // ChromeFill (via the same newFenceFill brush), same as Settings/"+" - matches this
-            // fence's own color theme instead of a fixed color, while staying readable against
-            // fixed WhiteSmoke; the "x" glyph itself already reads as destructive without needing
-            // a separate warning color too.
-            var deleteRect = ToWindow(GetDeleteButtonRect(contentWidth, onLeft));
-            using var deletePath = RoundedRect(deleteRect, 6);
-            g.FillPath(newFenceFill, deletePath);
-            PaintHeaderBorderModeOutline(g, deletePath);
-
-            using var xPen = new Pen(Color.WhiteSmoke, 1.6f);
-            var xCenterX = deleteRect.X + deleteRect.Width / 2f;
-            var xCenterY = deleteRect.Y + deleteRect.Height / 2f;
-            const float xHalfSize = 4.5f;
-            g.DrawLine(xPen, xCenterX - xHalfSize, xCenterY - xHalfSize, xCenterX + xHalfSize, xCenterY + xHalfSize);
-            g.DrawLine(xPen, xCenterX - xHalfSize, xCenterY + xHalfSize, xCenterX + xHalfSize, xCenterY - xHalfSize);
-        }
-
         PaintItems(g, contentWidth, contentHeight);
+    }
 
-        // Drawn last so it sits on top of everything else already painted into this same bitmap.
-        _buttonTooltip.Paint(g, Font, SettingsMenuTooltipColor, ToWindow(new Rectangle(0, 0, contentWidth, contentHeight)),
-            Style.HeaderBorderMode ? ThemedTitle : null);
+    /// <summary>Delete Fence's own glyph (see ExtraButtons) - the "x" glyph itself already reads as
+    /// destructive without needing a separate warning color too, same reasoning as this fence's own
+    /// trash-cell drop handling elsewhere.</summary>
+    private static void PaintDeleteFenceGlyph(Graphics g, Rectangle rect)
+    {
+        using var xPen = new Pen(Color.WhiteSmoke, 1.6f);
+        var cx = rect.X + rect.Width / 2f;
+        var cy = rect.Y + rect.Height / 2f;
+        const float half = 4.5f;
+        g.DrawLine(xPen, cx - half, cy - half, cx + half, cy + half);
+        g.DrawLine(xPen, cx - half, cy + half, cx + half, cy - half);
     }
 
     /// <summary>
@@ -1201,25 +1093,19 @@ internal sealed class FenceForm : LayeredWidgetForm
 
     /// <summary>Everything genuinely unique to a fence, not shared with any other widget on this
     /// base - shown in the "Additional" flyout LayeredWidgetForm's own default BuildSettingsRows adds
-    /// at the top of the menu when this returns non-empty. Hide Header/Full Opacity When Active/the
-    /// color grid/sliders/Corner Radius/Margin are all the base's own default rows now - this fence
-    /// doesn't need to (and no longer does) rebuild the whole row list just to add these three.
-    /// "Copy Fence"/"Delete Fence" normally live only as the "+"/"x" buttons next to Settings (see
-    /// GetNewFenceButtonRect/GetDeleteButtonRect/ConfirmDelete) - they only show up here too, at the
-    /// very top, once ButtonBandIsTight means those buttons aren't drawn at all (see PaintContent's
-    /// own gate), so the actions stay reachable rather than disappearing on a narrow fence. "Rename"
-    /// still only ever lives in the header's own context menu, regardless of width.</summary>
+    /// below the menu's own top-level rows when this returns non-empty. Hide Header/Full Opacity When
+    /// Active/the color grid/sliders/Corner Radius/Margin are all the base's own default rows now -
+    /// this fence doesn't need to (and no longer does) rebuild the whole row list just to add these
+    /// two. Copy Fence/Delete Fence are ExtraButtons now (see the constructor) - once this bar can't
+    /// fit them, LayeredWidgetForm's own BuildSettingsRows relocates them to the very top of the menu
+    /// itself, above "Base", not here. "Rename" still only ever lives in the header's own context
+    /// menu, regardless of width.</summary>
     protected override IReadOnlyList<DropdownMenu.Row>? BuildAdditionalSettingsRows()
     {
         var rows = new List<DropdownMenu.Row>();
 
-        if (ButtonBandIsTight(GetContentSize().Width))
-        {
-            rows.Add(new DropdownMenu.Row(CmdCopyFence, "Copy Fence"));
-            rows.Add(new DropdownMenu.Row(CmdDeleteFence, "Delete Fence"));
-            rows.Add(new DropdownMenu.Row(0, string.Empty, IsSeparator: true));
-        }
-
+        // Copy Fence/Delete Fence's own tight-band fallback is LayeredWidgetForm's own now (they're
+        // ExtraButtons - see BuildOverflowButtonRows), not a row inserted here.
         rows.Add(new DropdownMenu.Row(CmdToggleHideLabels, "Hide Shortcut Names", HasCheckbox: true, IsChecked: () => _model.HideLabels));
         rows.Add(new DropdownMenu.Row(CmdToggleOcdSizing, "OCD Fence Sizing", HasCheckbox: true, IsChecked: () => _model.OcdFenceSizing,
             Tooltip: GetMenuTooltipText(CmdToggleOcdSizing)));
@@ -1263,8 +1149,6 @@ internal sealed class FenceForm : LayeredWidgetForm
     {
         switch (id)
         {
-            case CmdCopyFence: _manager.CreateFenceLike(FenceId); break;
-            case CmdDeleteFence: ConfirmDelete(); break;
             case CmdToggleHideLabels: ToggleHideLabels(); break;
             case CmdResizeBoth: FormatDimensions(adjustWidth: true, adjustHeight: true); break;
             case CmdResizeLeftRight: FormatDimensions(adjustWidth: true, adjustHeight: false); break;

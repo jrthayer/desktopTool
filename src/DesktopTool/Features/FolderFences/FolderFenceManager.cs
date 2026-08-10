@@ -44,6 +44,109 @@ public sealed class FolderFenceManager : IDisposable
         Save();
     }
 
+    /// <summary>Same idea as CreateFence/CreateFenceLike (see that one's own doc comment) but for a
+    /// folder fence - seeded from an existing folder fence's own settings instead of the defaults,
+    /// used by FolderFenceForm's own "+" Copy Folder Fence button (see its ExtraButtons). Copies
+    /// every Base style setting plus the two settings a folder fence has (Hide Labels/OCD Fence
+    /// Sizing), the source's own size (not position - see NextDefaultBounds, same cascading
+    /// placement CreateFenceLike itself uses), and - unlike CreateFenceLike's own deliberate "not a
+    /// clone of its contents" stance for an ordinary fence's Files - RootFolderPath and Name too, so
+    /// the copy mirrors the exact same real folder the source does rather than landing back in the
+    /// empty "+" state needing to be pointed at one all over again. Never copies CurrentSubPath,
+    /// though - the copy starts browsing at that folder's own root, not wherever the source
+    /// currently happens to be browsed into. No cross-type Corner Radius re-clamp needed the way
+    /// ConvertFromFence needs (source is already a folder fence, so it's already within
+    /// FolderFenceForm's own lower ceiling).</summary>
+    public void CreateFolderFenceLike(Guid sourceId)
+    {
+        var source = _models.Find(m => m.Id == sourceId);
+        if (source is null)
+            return;
+
+        var model = new FolderFenceModel
+        {
+            Name = source.Name,
+            RootFolderPath = source.RootFolderPath,
+            Bounds = NextDefaultBounds(source.Bounds.Size),
+            HideLabels = source.HideLabels,
+            OcdFenceSizing = source.OcdFenceSizing,
+            TintColor = source.TintColor,
+            TintIsExact = source.TintIsExact,
+            HeaderDarkness = source.HeaderDarkness,
+            Opacity = source.Opacity,
+            FullOpacityOnHover = source.FullOpacityOnHover,
+            TintStrength = source.TintStrength,
+            Margin = source.Margin,
+            CornerRadius = source.CornerRadius,
+            TitleFontSize = source.TitleFontSize,
+            TitleAlignment = source.TitleAlignment,
+            HeaderBorderMode = source.HeaderBorderMode,
+            LightBorder = source.LightBorder,
+            HideHeader = source.HideHeader,
+            HeaderCloseButton = source.HeaderCloseButton,
+        };
+        _models.Add(model);
+        ShowFolderFence(model);
+        Save();
+    }
+
+    /// <summary>Converts an empty fence (source, already detached from FenceManager - see its own
+    /// TakeForConversion) into a new folder fence pointed at folderPath, in the same spot and
+    /// carrying over every Base style setting (tint/opacity/margin/corner radius/etc, HideHeader/
+    /// LightBorder/HeaderCloseButton) plus the two settings a fence and a folder fence both have
+    /// (Hide Shortcut Names/OCD Fence Sizing) - everything CreateFenceLike itself would carry
+    /// between two ordinary fences, translated across widget types. Never carries source's own Name
+    /// across - a folder fence names itself after the folder on first assignment, same as dropping
+    /// a folder onto its own empty "+" state does (see FolderFenceForm.SetRootFolder), so this
+    /// mirrors that instead of keeping whatever the empty fence happened to be called.
+    ///
+    /// HideHeader/LightBorder are carried over like everything else, unlike an earlier version of
+    /// this method that dropped them - both are now inert for a folder fence at the source (see
+    /// FolderFenceForm.HideHeader's own override and ShowLightBorderOption's doc comment on why
+    /// LightBorder needs no equivalent override), so there's no longer anything here that needs to
+    /// know to skip them.
+    ///
+    /// Corner Radius is re-clamped to FolderFenceForm's own lower ceiling (its tab/diagonal
+    /// proportions can't take as large a radius as a plain fence can) rather than carried over
+    /// as-is, which could otherwise land above what the Corner Radius stepper would ever let this
+    /// widget reach on its own.</summary>
+    public void ConvertFromFence(FenceModel source, string folderPath)
+    {
+        var model = new FolderFenceModel
+        {
+            Bounds = source.Bounds,
+            RootFolderPath = folderPath,
+            HideLabels = source.HideLabels,
+            OcdFenceSizing = source.OcdFenceSizing,
+            TintColor = source.TintColor,
+            TintIsExact = source.TintIsExact,
+            HeaderDarkness = source.HeaderDarkness,
+            Opacity = source.Opacity,
+            FullOpacityOnHover = source.FullOpacityOnHover,
+            TintStrength = source.TintStrength,
+            Margin = source.Margin,
+            CornerRadius = Math.Min(source.CornerRadius, FolderFenceCornerRadiusMax),
+            TitleFontSize = source.TitleFontSize,
+            TitleAlignment = source.TitleAlignment,
+            HeaderBorderMode = source.HeaderBorderMode,
+            LightBorder = source.LightBorder,
+            HideHeader = source.HideHeader,
+            HeaderCloseButton = source.HeaderCloseButton,
+        };
+
+        var folderName = Path.GetFileName(folderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        model.Name = string.IsNullOrEmpty(folderName) ? folderPath : folderName;
+
+        _models.Add(model);
+        ShowFolderFence(model);
+        Save();
+    }
+
+    // Mirrors FolderFenceForm.CornerRadiusMax - duplicated rather than referenced since that's a
+    // protected instance property on the form, not reachable from here (or worth making public just
+    // for this one cross-check).
+    private const int FolderFenceCornerRadiusMax = 20;
+
     public void DeleteFolderFence(Guid id)
     {
         var model = _models.Find(m => m.Id == id);
@@ -65,6 +168,21 @@ public sealed class FolderFenceManager : IDisposable
     /// form's own Visible, same "scan live state, never track a shadow flag" reasoning as
     /// FenceManager.AnyVisible.</summary>
     public bool AnyVisible => _forms.Values.Any(f => f.Visible);
+
+    /// <summary>Finds the folder fence window (other than excludeId) whose window rect contains
+    /// screenPoint - mirrors FenceManager.FindFenceAt, used when a folder fence's own grid-item drag
+    /// (see FolderFenceForm.OnMouseUp/ComputeDragHint) is released over a *different* folder fence
+    /// instead of an ordinary one, so a dragged subfolder can connect an empty target the same way
+    /// dropping it there directly (OLE, or the "+" button) already would.</summary>
+    internal FolderFenceForm? FindFolderFenceAt(Point screenPoint, Guid excludeId)
+    {
+        foreach (var (id, form) in _forms)
+        {
+            if (id != excludeId && form.Bounds.Contains(screenPoint))
+                return form;
+        }
+        return null;
+    }
 
     public void SetAllVisible(bool visible)
     {
@@ -91,6 +209,18 @@ public sealed class FolderFenceManager : IDisposable
             workArea.Left + (workArea.Width - DefaultFolderFenceSize.Width) / 2,
             workArea.Top + (workArea.Height - DefaultFolderFenceSize.Height) / 2,
             DefaultFolderFenceSize.Width, DefaultFolderFenceSize.Height);
+    }
+
+    /// <summary>Where a copy (CreateFolderFenceLike) lands - cascading near the top-left corner
+    /// rather than CenteredBounds' own dead-center placement, same reasoning/formula as
+    /// FenceManager's own NextDefaultBounds: a duplicate should land near where you started, not
+    /// stack exactly on top of the original or jump to the middle of the screen.</summary>
+    private Rectangle NextDefaultBounds(Size? size = null)
+    {
+        var workArea = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
+        var offset = (_forms.Count % 8) * 24;
+        var resolvedSize = size ?? DefaultFolderFenceSize;
+        return new Rectangle(workArea.Left + 80 + offset, workArea.Top + 80 + offset, resolvedSize.Width, resolvedSize.Height);
     }
 
     private FolderFenceForm ShowFolderFence(FolderFenceModel model)

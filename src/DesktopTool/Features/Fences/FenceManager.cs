@@ -16,6 +16,11 @@ public sealed class FenceManager : IDisposable
 
     public SnapLineManager SnapLines { get; } = new();
 
+    /// <summary>Forwards every live FenceForm's own FolderDroppedOnEmptyFence up a level - see that
+    /// event's own doc comment for why FenceManager itself only relays this rather than acting on it
+    /// (it has no notion of "Folder Fence" at all). Wired per-form in ShowFence below.</summary>
+    public event EventHandler<(Guid FenceId, string FolderPath)>? FolderDroppedOnEmptyFence;
+
     public FenceManager()
     {
         // EmbeddedDesktopAnchorStrategy's SetParent mechanics work correctly (verified via
@@ -464,10 +469,38 @@ public sealed class FenceManager : IDisposable
     private FenceForm ShowFence(FenceModel model)
     {
         var form = new FenceForm(model, this, _anchorStrategy);
+        form.FolderDroppedOnEmptyFence += (_, folderPath) => FolderDroppedOnEmptyFence?.Invoke(this, (model.Id, folderPath));
         _forms[model.Id] = form;
         form.Show();
         form.Reanchor();
         return form;
+    }
+
+    /// <summary>Detaches fenceId's own model/form for conversion into a different kind of widget
+    /// (currently only a Folder Fence - see FolderFenceManager.ConvertFromFence) and returns the
+    /// model so the caller can carry its settings over. Null (and a no-op) if fenceId no longer
+    /// matches anything alive, or it's picked up so much as a single item since the drop that
+    /// triggered this - same race DeleteFence itself doesn't need to guard against, since nothing
+    /// else deletes a fence out from under a still-in-flight drop.
+    ///
+    /// Skips DeleteFence's own restore-to-desktop handling entirely - safe only because this is
+    /// exclusively reached with an empty fence (see the Files.Count guard below), which never has
+    /// any real file to restore in the first place.</summary>
+    internal FenceModel? TakeForConversion(Guid fenceId)
+    {
+        var model = _models.Find(m => m.Id == fenceId);
+        if (model is null || model.Files.Count > 0)
+            return null;
+        _models.Remove(model);
+
+        if (_forms.Remove(fenceId, out var form))
+            // Deferred rather than disposed right here - same reasoning as DeleteFence's own
+            // BeginInvoke: this runs from inside the very form's own OnDragDrop, further up this
+            // same call stack.
+            form.BeginInvoke(new Action(form.Dispose));
+
+        Save();
+        return model;
     }
 
     private bool IsReferencedByAnyFence(string path) => _models.Any(m => m.Files.Any(f => f.Path == path));

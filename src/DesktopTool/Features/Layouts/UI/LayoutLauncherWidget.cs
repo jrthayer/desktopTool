@@ -93,9 +93,15 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
         _model = model;
         _store = store;
 
+        // Repaints the row list immediately whenever a profile is added/renamed/deleted/duplicated
+        // from elsewhere (the Manage Layouts editor, most commonly) - without this, a rename only
+        // shows up here once some unrelated interaction of this widget's own (a row hover, say)
+        // happens to trigger a repaint.
+        _manager.ProfilesChanged += OnProfilesChanged;
+
         ExtraButtons = new List<ChromeButton>
         {
-            new("×", 22, HideAndPersist),
+            new("×", 22, HideAndPersist, "Hide Layout Launcher"),
         };
 
         FormBorderStyle = FormBorderStyle.None;
@@ -192,10 +198,18 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
 
     private void Persist() => _store.Save(_model);
 
+    private void OnProfilesChanged(object? sender, EventArgs e)
+    {
+        // Rows Shown tracks the live saved-layout count while AlwaysMaxRows is on (see its own doc
+        // comment) - a no-op otherwise, but either way the list itself needs repainting to pick up
+        // whatever just changed (name, count, or both).
+        SyncRowsShownToMax();
+        RenderAndPresent();
+    }
+
     protected override void DisposeOwnedResources()
     {
-        // Nothing owned - no icon cache, no drag ghost (both come back with the layout list), and
-        // the row tooltip is hand-painted now, not a native control needing disposal.
+        _manager.ProfilesChanged -= OnProfilesChanged;
     }
 
     protected override Rectangle GetCurrentBody() => new(
@@ -247,7 +261,6 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
         var contentPoint = ToContent(windowPoint);
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
         if (ShowsButtons && (GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
-            || GetCopySettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
             || TryGetExtraButtonAt(contentWidth, onLeft, contentPoint, out _)))
             return HTCLIENT;
 
@@ -301,8 +314,6 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
             _settingsButtonArmed = true;
             return;
         }
-        if (ShowsButtons && TryArmCopySettingsButton(contentPoint))
-            return;
         if (ShowsButtons && TryArmExtraButton(contentPoint))
             return;
         if (TryArmContentButton(contentPoint))
@@ -361,7 +372,6 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
             return;
         }
 
-        FireArmedCopySettingsButton(contentPoint);
         FireArmedExtraButton(contentPoint);
         FireArmedContentButton(contentPoint);
         EndListScrollDrag();

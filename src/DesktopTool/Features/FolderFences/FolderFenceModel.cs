@@ -30,6 +30,14 @@ public sealed class FolderFenceModel : WidgetStyleModel
     /// fence's contents are read live off disk every time (see FolderFenceForm's own grid).</summary>
     public string? RootFolderPath { get; set; }
 
+    /// <summary>Relative path under RootFolderPath the fence was last browsed into (see
+    /// FolderFenceForm.NavigateInto/NavigateUp) - null means the root itself. Restored on the next
+    /// launch (see FolderFenceForm's own constructor), which re-validates it still exists on disk
+    /// first (the real folder could have been renamed/deleted/moved out from under it between
+    /// sessions) rather than trusting it blindly - falls back to the root, and clears this back to
+    /// null, if it doesn't.</summary>
+    public string? CurrentSubPath { get; set; }
+
     // Same two "fence additionals" FenceModel offers (see FenceForm.BuildAdditionalSettingsRows) -
     // HideLabels/OcdFenceSizing apply identically to a folder fence's own grid.
     public bool HideLabels { get; set; }

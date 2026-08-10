@@ -76,7 +76,26 @@ internal sealed class DropdownMenu : Form
         // in a preceding IsHeader row instead.
         bool IsAlignmentPicker = false,
         Func<TitleAlignment>? AlignmentValue = null,
-        Action<TitleAlignment>? OnAlignmentChange = null);
+        Action<TitleAlignment>? OnAlignmentChange = null,
+        // IsButtonRow turns this row into a single small icon-glyph button - a run of consecutive
+        // IsButtonRow rows packs left-to-right and wraps onto additional lines instead of one
+        // full-width row each (see LayoutRows), the same "each row is its own grid cell" convention
+        // IsGridItem already established, just fixed-size square cells instead of a fixed column
+        // count (a button count can vary far more than the color palette ever did, so packing
+        // however many fit per line reads better than a fixed 5-wide grid would for, say, one or
+        // two buttons). Never widens the menu itself past what its other rows already need (see
+        // LayoutRows' own maxWidth pass, which skips these) - deliberately so a widget with more
+        // extra buttons than fit on one line just gets more lines here, not a wider dropdown.
+        // ButtonGlyph paints the icon itself into its own cell rect (see LayeredWidgetForm.
+        // ChromeButton.PaintGlyph, which this is built from); ButtonOnClick fires directly on the
+        // matching mouse-up, same "callback lives on the row itself" convention as OnAlignmentChange/
+        // OnStepperChange/OnSliderChange above rather than routing through Id/ItemClicked - a
+        // ChromeButton's own OnClick is already a plain Action, so there's no synthetic command id
+        // to invent here. Id/Text are unused for these rows; Tooltip still works normally (see
+        // UpdateTooltip) since an icon-only button has no visible label of its own to explain it.
+        bool IsButtonRow = false,
+        Action<Graphics, Rectangle>? ButtonGlyph = null,
+        Action? ButtonOnClick = null);
 
     private const int RowPadding = 8;
     private const int CheckboxSize = 12;
@@ -96,6 +115,13 @@ internal sealed class DropdownMenu : Form
     private const int GridColumns = 5;
     private const int GridCellHeight = 32;
     private const int GridCircleSize = 20;
+
+    // IsButtonRow's own cell size/gap - matches LayeredWidgetForm's own bar-button footprint
+    // (SettingsButtonHeight/CopySettingsButtonWidth are both 22) rather than GridCircleSize's 20, so
+    // a button dropped down here reads as the same size it was on the bar, just relocated.
+    private const int ButtonCellSize = 22;
+    private const int ButtonCellGap = 6;
+    private const int ButtonRowVerticalPadding = 5;
 
     private readonly List<Row> _rows;
     private readonly List<Rectangle> _rowRects = new();
@@ -346,7 +372,9 @@ internal sealed class DropdownMenu : Form
 
         foreach (var row in rows)
         {
-            if (row.IsGridItem || row.IsSeparator)
+            // Unlike IsGridItem, IsButtonRow contributes no floor at all here - see Row.IsButtonRow's
+            // own doc comment on why it should wrap onto more lines instead of ever widening the menu.
+            if (row.IsGridItem || row.IsButtonRow || row.IsSeparator)
                 continue;
             var textSize = TextRenderer.MeasureText(row.Text, font);
             var leftReserve = row.HasCheckbox || row.Swatch is not null ? CheckboxSize + RowPadding : 0;
@@ -375,6 +403,31 @@ internal sealed class DropdownMenu : Form
                     rowRects.Add(new Rectangle(1 + col * cellWidth, y + gridRow * GridCellHeight, cellWidth, GridCellHeight));
                 }
                 y += ((count + GridColumns - 1) / GridColumns) * GridCellHeight;
+                continue;
+            }
+
+            if (rows[i].IsButtonRow)
+            {
+                var start = i;
+                while (i < rows.Count && rows[i].IsButtonRow)
+                    i++;
+                var count = i - start;
+                // However many fixed-size cells actually fit across the menu's own already-resolved
+                // width (never fewer than 1, even on a menu narrower than a single cell) - the rest
+                // wrap onto additional lines, rather than this row ever pushing width back out past
+                // what LayoutRows' own maxWidth pass already decided (see that pass's own comment on
+                // why IsButtonRow is skipped there).
+                var columns = Math.Max(1, (width - 2 - RowPadding * 2 + ButtonCellGap) / (ButtonCellSize + ButtonCellGap));
+                var rowHeight = ButtonCellSize + ButtonRowVerticalPadding * 2;
+                for (var j = 0; j < count; j++)
+                {
+                    var col = j % columns;
+                    var buttonRow = j / columns;
+                    var x = RowPadding + col * (ButtonCellSize + ButtonCellGap);
+                    var cellY = y + buttonRow * rowHeight + ButtonRowVerticalPadding;
+                    rowRects.Add(new Rectangle(x, cellY, ButtonCellSize, ButtonCellSize));
+                }
+                y += ((count + columns - 1) / columns) * rowHeight;
                 continue;
             }
 
@@ -412,6 +465,12 @@ internal sealed class DropdownMenu : Form
         if (row.IsGridItem)
         {
             DrawGridItem(g, row, rect, index == _hoverIndex);
+            return;
+        }
+
+        if (row.IsButtonRow)
+        {
+            DrawButtonCell(g, row, rect, index == _hoverIndex);
             return;
         }
 
@@ -542,6 +601,26 @@ internal sealed class DropdownMenu : Form
         var isChecked = row.IsChecked?.Invoke() ?? false;
         using var pen = new Pen(isChecked ? _getAccent() : _getCheckboxBorder(), isChecked ? 2 : 1);
         g.DrawEllipse(pen, circleRect);
+    }
+
+    /// <summary>A single relocated bar button - same rounded-rect-plus-hover-tint chrome
+    /// PaintButtonHoverTint/PaintExtraButtons already use on the bar itself, just filled with
+    /// _getSelected() only on hover (the row it's sitting on is already opaque, unlike the
+    /// near-transparent margin band a real ChromeButton needs its own always-on fill to stay legible
+    /// against) rather than filled at rest too. row.ButtonGlyph does the actual drawing - this only
+    /// provides the cell chrome around it.</summary>
+    private void DrawButtonCell(Graphics g, Row row, Rectangle rect, bool hovered)
+    {
+        using (var path = RoundedRectPath.Full(rect, 4))
+        {
+            if (hovered)
+                using (var hoverBrush = new SolidBrush(_getSelected()))
+                    g.FillPath(hoverBrush, path);
+            using var borderPen = new Pen(_getCheckboxBorder());
+            g.DrawPath(borderPen, path);
+        }
+
+        row.ButtonGlyph?.Invoke(g, rect);
     }
 
     /// <summary>A horizontal track (see SliderTrack) with an Accent-filled portion up to the current
@@ -987,6 +1066,16 @@ internal sealed class DropdownMenu : Form
 
         if (_rows[index].IsSlider || _rows[index].IsStepper || _rows[index].IsAlignmentPicker)
             return;
+
+        if (_rows[index].IsButtonRow)
+        {
+            // Same "wherever the mouse-up lands" convention every other row here already uses (see
+            // the plain ItemClicked dispatch below) - no arm-on-down/still-over-on-up matching the
+            // way the real bar button this was relocated from needs, since nothing in OnMouseDown
+            // tracks a row index for a plain click to begin with.
+            _rows[index].ButtonOnClick?.Invoke();
+            return;
+        }
 
         if (_rows[index].Submenu is { } submenuRows)
         {

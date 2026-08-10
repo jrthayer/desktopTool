@@ -200,7 +200,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         var contentPoint = ToContent(windowPoint);
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
         if (ShowsButtons && (GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
-            || GetCopySettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)))
+            || TryGetExtraButtonAt(contentWidth, onLeft, contentPoint, out _)))
             return HTCLIENT;
 
         // Not gated by ShowsButtons, unlike the check above - see IsOverHeaderCloseButton's own
@@ -244,7 +244,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
             _settingsButtonArmed = true;
             return;
         }
-        if (ShowsButtons && TryArmCopySettingsButton(contentPoint))
+        if (ShowsButtons && TryArmExtraButton(contentPoint))
             return;
         if (TryHandleListMouseDown(contentPoint))
             return;
@@ -285,7 +285,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
             return;
         }
 
-        FireArmedCopySettingsButton(contentPoint);
+        FireArmedExtraButton(contentPoint);
         EndListScrollDrag();
 
         if (_armedRowIndex is int armedIndex)

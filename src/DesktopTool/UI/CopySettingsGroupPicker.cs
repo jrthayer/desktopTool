@@ -14,7 +14,7 @@ namespace DesktopTool.UI;
 /// settings to every live widget (see LayeredWidgetForm.LiveWidgets) matching that category.
 ///
 /// Seeded from the source widget's own current look every time a pick starts (see
-/// LayeredWidgetForm.FireArmedCopySettingsButton, which calls CopySettingsFrom right after
+/// LayeredWidgetForm.OpenCopySettingsPicker, which calls CopySettingsFrom right after
 /// construction) - so it reads as "belonging to" whatever opened it, the same copy every individual
 /// click-a-widget target already gets. Being a real, independently-styled widget now, a Settings
 /// change made on THIS widget specifically will of course drift from the source's own from then on,
@@ -76,7 +76,7 @@ internal sealed class CopySettingsGroupPicker : LayeredWidgetForm
         // "x" closes outright (Dispose, via the FormClosed wiring at the call site) rather than
         // hiding the way WidgetManagerWidget/LayoutLauncherWidget's own "x" does - there's no
         // persisted-hidden state worth keeping for a widget that's recreated fresh on every pick.
-        ExtraButtons = new List<ChromeButton> { new("×", 22, Close) };
+        ExtraButtons = new List<ChromeButton> { new("×", 22, Close, "Close") };
 
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -168,7 +168,6 @@ internal sealed class CopySettingsGroupPicker : LayeredWidgetForm
         var contentPoint = ToContent(windowPoint);
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
         if (ShowsButtons && (GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
-            || GetCopySettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
             || TryGetExtraButtonAt(contentWidth, onLeft, contentPoint, out _)))
             return HTCLIENT;
 
@@ -213,8 +212,6 @@ internal sealed class CopySettingsGroupPicker : LayeredWidgetForm
             _settingsButtonArmed = true;
             return;
         }
-        if (ShowsButtons && TryArmCopySettingsButton(contentPoint))
-            return;
         if (ShowsButtons && TryArmExtraButton(contentPoint))
             return;
         if (TryHandleListMouseDown(contentPoint))
@@ -271,7 +268,6 @@ internal sealed class CopySettingsGroupPicker : LayeredWidgetForm
             return;
         }
 
-        FireArmedCopySettingsButton(contentPoint);
         FireArmedExtraButton(contentPoint);
         EndListScrollDrag();
 

@@ -129,8 +129,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
         ExtraButtons = new List<ChromeButton>
         {
-            new("?", 22, () => HelpRequested?.Invoke(this, EventArgs.Empty)),
-            new("×", 22, HideAndPersist),
+            new("?", 22, () => HelpRequested?.Invoke(this, EventArgs.Empty), "Help"),
+            new("×", 22, HideAndPersist, "Hide Widget Manager"),
         };
 
         FormBorderStyle = FormBorderStyle.None;
@@ -288,7 +288,6 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         var contentPoint = ToContent(windowPoint);
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
         if (ShowsButtons && (GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
-            || GetCopySettingsButtonRect(contentWidth, onLeft).Contains(contentPoint)
             || TryGetExtraButtonAt(contentWidth, onLeft, contentPoint, out _)))
             return HTCLIENT;
 
@@ -342,8 +341,6 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             _settingsButtonArmed = true;
             return;
         }
-        if (ShowsButtons && TryArmCopySettingsButton(contentPoint))
-            return;
         if (ShowsButtons && TryArmExtraButton(contentPoint))
             return;
         if (TryHandleListMouseDown(contentPoint))
@@ -400,7 +397,6 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             return;
         }
 
-        FireArmedCopySettingsButton(contentPoint);
         FireArmedExtraButton(contentPoint);
         EndListScrollDrag();
 

@@ -5,7 +5,7 @@ namespace DesktopTool.UI;
 /// widget also starts centered (on the source widget's own monitor, rather than always the primary
 /// one - see CopySettingsGroupPicker.GetCurrentBody) instead of at a fixed remembered spot the very
 /// first time it's ever opened. No persisted Visible, unlike those two - this widget is created and
-/// disposed fresh per pick (see LayeredWidgetForm.FireArmedCopySettingsButton) rather than kept
+/// disposed fresh per pick (see LayeredWidgetForm.OpenCopySettingsPicker) rather than kept
 /// around hidden between uses.</summary>
 public sealed class CopySettingsPickerModel : WidgetStyleModel
 {

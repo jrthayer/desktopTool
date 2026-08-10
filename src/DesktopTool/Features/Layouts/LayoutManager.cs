@@ -13,6 +13,12 @@ public sealed class LayoutManager
 
     public IReadOnlyList<LayoutProfile> Profiles => _profiles;
 
+    /// <summary>Raised whenever a profile is added, renamed/edited, deleted, or duplicated - lets the
+    /// Layout Launcher widget's own row list repaint immediately (see LayoutLauncherWidget's
+    /// subscription) instead of only catching up whenever some unrelated interaction (a row hover,
+    /// say) happens to trigger a repaint of its own.</summary>
+    public event EventHandler? ProfilesChanged;
+
     public void Load()
     {
         _profiles.Clear();
@@ -24,6 +30,7 @@ public sealed class LayoutManager
         var profile = new LayoutProfile { Name = name };
         _profiles.Add(profile);
         Save();
+        ProfilesChanged?.Invoke(this, EventArgs.Empty);
         return profile;
     }
 
@@ -35,6 +42,7 @@ public sealed class LayoutManager
         var profile = new LayoutProfile { Name = name, Entries = WindowPlacer.CaptureCurrentLayout() };
         _profiles.Add(profile);
         Save();
+        ProfilesChanged?.Invoke(this, EventArgs.Empty);
         return profile;
     }
 
@@ -44,6 +52,7 @@ public sealed class LayoutManager
         if (index >= 0)
             _profiles[index] = profile;
         Save();
+        ProfilesChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void DeleteLayout(Guid id)
@@ -51,6 +60,7 @@ public sealed class LayoutManager
         _profiles.RemoveAll(p => p.Id == id);
         _launchErrors.Remove(id);
         Save();
+        ProfilesChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>"Copy" in the launcher widget - a fully independent clone (fresh Id from
@@ -73,6 +83,7 @@ public sealed class LayoutManager
         };
         _profiles.Insert(index + 1, copy);
         Save();
+        ProfilesChanged?.Invoke(this, EventArgs.Empty);
         return copy;
     }
 

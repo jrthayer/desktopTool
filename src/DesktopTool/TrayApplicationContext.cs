@@ -47,6 +47,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
     public TrayApplicationContext()
     {
         _folderFenceManager = new FolderFenceManager(_fenceManager);
+        // Dropping a single folder onto an empty fence converts it into a folder fence instead of
+        // adding the folder as an ordinary shortcut - see FenceForm.FolderDroppedOnEmptyFence's own
+        // doc comment for why this lives here rather than on either manager directly.
+        _fenceManager.FolderDroppedOnEmptyFence += (_, e) =>
+        {
+            if (_fenceManager.TakeForConversion(e.FenceId) is { } source)
+                _folderFenceManager.ConvertFromFence(source, e.FolderPath);
+        };
 
         _layoutManager.Load();
         _layoutManager.LaunchFailed += OnLayoutLaunchFailed;
