@@ -231,6 +231,19 @@ internal abstract class LayeredWidgetForm : Form
     protected static bool ComputeButtonRowAtBottom(Point bodyScreenLocation, int bandHeightAtTop) =>
         bodyScreenLocation.Y - bandHeightAtTop < Screen.FromPoint(bodyScreenLocation).WorkingArea.Top;
 
+    /// <summary>What WM_MOVING/WM_SIZING (and each subclass's own CreateParams) actually call to
+    /// refresh ButtonRowAtBottom for body's current position - ComputeButtonRowAtBottom(body.Location,
+    /// MaxTopBand) by default, the same top-overflow check every widget on this base has always used.
+    /// A subclass whose button row instead defaults to the BOTTOM band, flipping to the top only when
+    /// there wouldn't be room below (FolderFenceForm's own folder tab always needs its own reserved
+    /// space up top regardless of where the button row is - see TopBand/SettingsButtonRowInset -
+    /// so the usual "default top, flip to bottom" trade only kicks in when overflowing the bottom
+    /// instead) overrides this with the mirrored check, using body's own Height too (which the
+    /// simpler Point-based helper above never needed, since a plain top-overflow check never cared
+    /// how tall body was).</summary>
+    protected virtual bool ComputeButtonRowAtBottomFor(Rectangle body) =>
+        ComputeButtonRowAtBottom(body.Location, MaxTopBand);
+
     protected static Point ScreenLParamToWindowPoint(IntPtr lParam, RECT windowRect)
     {
         long l = lParam.ToInt64();
@@ -551,54 +564,71 @@ internal abstract class LayeredWidgetForm : Form
     /// these additional rows didn't add).</summary>
     protected virtual IReadOnlyList<DropdownMenu.Row>? BuildAdditionalSettingsRows() => null;
 
+    /// <summary>Whether the "Light Border" row below is offered at all - true by default. A
+    /// subclass whose header isn't a plain rounded band (FolderFenceForm's own folder tab, say) can
+    /// turn this off if a lone stroke around just the header reads as wrong/incomplete against its
+    /// own shape, rather than that combination needing to be supported everywhere.</summary>
+    protected virtual bool ShowLightBorderOption => true;
+
     /// <summary>Font Size (a stepper, same interface as Margin/Corner Radius), Align (Left/Center/
     /// Right, see DropdownMenu.Row.IsAlignmentPicker), and Light Border - all affect the title row
     /// specifically (see TitleFont/PaintChrome's title draw and its own header-outline stroke),
     /// nested in their own "Header" flyout at the top of "Base" rather than inline, so they read as
     /// a distinct group from the fill/tint-driven rows below them.</summary>
-    private List<DropdownMenu.Row> BuildHeaderSettingsRows() => new()
+    private List<DropdownMenu.Row> BuildHeaderSettingsRows()
     {
-        new(0, "Font Size", IsHeader: true),
-        new(0, string.Empty, IsStepper: true,
-            StepperValue: () => Style.TitleFontSize,
-            OnStepperChange: size =>
-            {
-                Style.TitleFontSize = Math.Clamp(size, 7, 14);
-                PersistStyle();
-                RenderAndPresent();
-            },
-            // Max of 14, not some rounder-looking number like 20 - TitleRowHeight is a fixed
-            // ~26-28px, and a much larger point size than this renders taller than that (vertically
-            // clipped by the row itself) rather than actually fitting.
-            StepperMin: 7, StepperMax: 14, StepperStep: 1, StepperSuffix: ""),
-        new(0, string.Empty, IsSeparator: true),
-        new(0, "Align", IsHeader: true),
-        new(0, string.Empty, IsAlignmentPicker: true,
-            AlignmentValue: () => Style.TitleAlignment,
-            OnAlignmentChange: alignment =>
-            {
-                Style.TitleAlignment = alignment;
-                PersistStyle();
-                RenderAndPresent();
-            }),
-        new(0, string.Empty, IsSeparator: true),
-        // Independent of Header Border Mode (see CmdToggleHeaderBorderMode's own handling) - turning
-        // Header Border Mode on ticks this OFF, since Header Border Mode already borders the title
-        // row its own way, but it stays a genuinely separate flag the user can tick back on
-        // afterward without touching Header Border Mode itself. Outlines just the title row (see
-        // PaintChrome's own header-border stroke) in the plain ThemedBorder color, unlike Header
-        // Border Mode's own themed border, which covers the rest of the widget instead.
-        new(CmdToggleLightBorder, "Light Border", HasCheckbox: true,
-            IsChecked: () => Style.LightBorder,
-            Tooltip: "Border the title row on its own, in the plain default color, independent of Header Border Mode"),
-        new(0, string.Empty, IsSeparator: true),
+        var rows = new List<DropdownMenu.Row>
+        {
+            new(0, "Font Size", IsHeader: true),
+            new(0, string.Empty, IsStepper: true,
+                StepperValue: () => Style.TitleFontSize,
+                OnStepperChange: size =>
+                {
+                    Style.TitleFontSize = Math.Clamp(size, 7, 14);
+                    PersistStyle();
+                    RenderAndPresent();
+                },
+                // Max of 14, not some rounder-looking number like 20 - TitleRowHeight is a fixed
+                // ~26-28px, and a much larger point size than this renders taller than that
+                // (vertically clipped by the row itself) rather than actually fitting.
+                StepperMin: 7, StepperMax: 14, StepperStep: 1, StepperSuffix: ""),
+            new(0, string.Empty, IsSeparator: true),
+            new(0, "Align", IsHeader: true),
+            new(0, string.Empty, IsAlignmentPicker: true,
+                AlignmentValue: () => Style.TitleAlignment,
+                OnAlignmentChange: alignment =>
+                {
+                    Style.TitleAlignment = alignment;
+                    PersistStyle();
+                    RenderAndPresent();
+                }),
+        };
+
+        if (ShowLightBorderOption)
+        {
+            rows.Add(new(0, string.Empty, IsSeparator: true));
+            // Independent of Header Border Mode (see CmdToggleHeaderBorderMode's own handling) -
+            // turning Header Border Mode on ticks this OFF, since Header Border Mode already
+            // borders the title row its own way, but it stays a genuinely separate flag the user
+            // can tick back on afterward without touching Header Border Mode itself. Outlines just
+            // the title row (see PaintChrome's own header-border stroke) in the plain ThemedBorder
+            // color, unlike Header Border Mode's own themed border, which covers the rest of the
+            // widget instead.
+            rows.Add(new(CmdToggleLightBorder, "Light Border", HasCheckbox: true,
+                IsChecked: () => Style.LightBorder,
+                Tooltip: "Border the title row on its own, in the plain default color, independent of Header Border Mode"));
+        }
+
+        rows.Add(new(0, string.Empty, IsSeparator: true));
         // Unlike every other row in this flyout, paints/hit-tests regardless of ShowsButtons (see
         // GetHeaderCloseButtonRect/PaintChrome's own close-glyph draw) - the whole point is a close
         // action reachable without first engaging the widget the way Settings/Extra buttons require.
-        new(CmdToggleHeaderCloseButton, "Close Button", HasCheckbox: true,
+        rows.Add(new(CmdToggleHeaderCloseButton, "Close Button", HasCheckbox: true,
             IsChecked: () => ShowHeaderCloseButton,
-            Tooltip: "Always show a close button in the title row, without needing to right-click or click the title first"),
-    };
+            Tooltip: "Always show a close button in the title row, without needing to right-click or click the title first"));
+
+        return rows;
+    }
 
     /// <summary>Floor for Opacity (see StyleMenuRows.Build's own slider, which otherwise allows the
     /// full 0-100%) - 0% would be both fully invisible and (per LayeredWindowPresenter's own doc
@@ -608,6 +638,18 @@ internal abstract class LayeredWidgetForm : Form
     /// (or, worse, by whatever persists it - see FenceManager/LayoutLauncherWidget's own now-removed
     /// copies of this exact clamp, which had drifted to two different floors, 15 and 5).</summary>
     protected const int MinOpacity = 15;
+
+    /// <summary>Whether the "Hide Header" row below is offered at all - true by default. A subclass
+    /// whose header is load-bearing for something beyond just showing a title (FolderFenceForm's own
+    /// folder tab, which has nothing to attach to without a header underneath it) can turn this off
+    /// rather than that combination needing to be supported everywhere.</summary>
+    protected virtual bool ShowHideHeaderOption => true;
+
+    /// <summary>Ceiling for the Corner Radius stepper below - 50 by default. A subclass whose own
+    /// shape doesn't hold up as well at large radii (FolderFenceForm's own folder-tab geometry,
+    /// whose tab/diagonal proportions are sized for a more modest range) can lower this instead of
+    /// that combination needing to be supported everywhere.</summary>
+    protected virtual int CornerRadiusMax => 50;
 
     /// <summary>The "Header" flyout (see BuildHeaderSettingsRows), then Hide Header, Full Opacity When
     /// Active, and the shared color grid/Header Darkness/Opacity/Tint Strength sliders/Corner Radius/
@@ -627,15 +669,16 @@ internal abstract class LayeredWidgetForm : Form
         {
             new(0, "Header", Submenu: BuildHeaderSettingsRows()),
             new(0, string.Empty, IsSeparator: true),
-            new(CmdToggleHideHeader, "Hide Header", HasCheckbox: true, IsChecked: () => HideHeader),
-            new(CmdToggleFullOpacityOnHover, "Full Opacity When Active", HasCheckbox: true,
-                IsChecked: () => Style.FullOpacityOnHover,
-                Tooltip: "Full opacity while hovered, dragged/resized, or this menu is open"),
-            new(CmdToggleHeaderBorderMode, "Header Border Mode", HasCheckbox: true,
-                IsChecked: () => Style.HeaderBorderMode,
-                Tooltip: "Border every element (the widget itself, its buttons, its list) in the header's own color"),
-            new(0, string.Empty, IsSeparator: true),
         };
+        if (ShowHideHeaderOption)
+            rows.Add(new(CmdToggleHideHeader, "Hide Header", HasCheckbox: true, IsChecked: () => HideHeader));
+        rows.Add(new(CmdToggleFullOpacityOnHover, "Full Opacity When Active", HasCheckbox: true,
+            IsChecked: () => Style.FullOpacityOnHover,
+            Tooltip: "Full opacity while hovered, dragged/resized, or this menu is open"));
+        rows.Add(new(CmdToggleHeaderBorderMode, "Header Border Mode", HasCheckbox: true,
+            IsChecked: () => Style.HeaderBorderMode,
+            Tooltip: "Border every element (the widget itself, its buttons, its list) in the header's own color"));
+        rows.Add(new(0, string.Empty, IsSeparator: true));
         rows.AddRange(StyleMenuRows.Build(Style, DefaultBodyColor, CmdColorDefault, CmdColorCustom, CmdColorEyedrop, CmdColorPresetBase,
             darkness =>
             {
@@ -661,7 +704,7 @@ internal abstract class LayeredWidgetForm : Form
             },
             radius =>
             {
-                Style.CornerRadius = Math.Clamp(radius, 0, 50);
+                Style.CornerRadius = Math.Clamp(radius, 0, CornerRadiusMax);
                 PersistStyle();
                 RenderAndPresent();
             },
@@ -670,7 +713,8 @@ internal abstract class LayeredWidgetForm : Form
                 Style.Margin = Math.Clamp(margin, 0, 100);
                 PersistStyle();
                 RenderAndPresent();
-            }));
+            },
+            cornerRadiusMax: CornerRadiusMax));
         return rows;
     }
 
@@ -749,29 +793,32 @@ internal abstract class LayeredWidgetForm : Form
     protected void PaintChrome(Graphics g, int contentWidth, int contentHeight)
     {
         var cornerRadius = Style.CornerRadius;
-        using var body = RoundedRectPath.Full(ToWindow(new Rectangle(0, 0, contentWidth - 1, contentHeight - 1)), cornerRadius);
-        using (var bodyFill = new SolidBrush(ThemedBody))
-            g.FillPath(bodyFill, body);
+        using var body = GetBodyOutlinePath(contentWidth, contentHeight, cornerRadius);
 
         if (TitleVisible)
         {
+            // Filled as two non-overlapping regions rather than the whole rounded body (`body`,
+            // reused below only for the border stroke) followed by the header's own own fill shape
+            // painted again directly on top of it - see RoundedRectPath.BottomFilled's own doc
+            // comment for why that used to leave a faint seam along the header's left/right edges.
+            using (var bodyBelowHeader = RoundedRectPath.BottomFilled(ToWindow(new Rectangle(0, 0, contentWidth - 1, contentHeight - 1)), cornerRadius, TitleRowHeight))
+            using (var bodyFill = new SolidBrush(ThemedBody))
+                g.FillPath(bodyFill, bodyBelowHeader);
+
             using var titleFill = new SolidBrush(ThemedTitle);
-            using var titlePath = RoundedRectPath.Top(ToWindow(new Rectangle(0, 0, contentWidth - 1, TitleRowHeight)), cornerRadius);
+            using var titlePath = GetHeaderFillPath(contentWidth, cornerRadius);
             g.FillPath(titleFill, titlePath);
+        }
+        else
+        {
+            using var bodyFill = new SolidBrush(ThemedBody);
+            g.FillPath(bodyFill, body);
         }
 
         // ShowsButtons (right-click activation) always wins over Header Border Mode here - the bright
         // ThemedActiveBorder is how an activated widget reads at all, so Header Border Mode only
         // replaces the plain inactive-state ThemedBorder, never this.
         var borderColor = ShowsButtons ? ThemedActiveBorder : (Style.HeaderBorderMode ? ThemedTitle : ThemedBorder);
-        // Whether this stroke should wrap the header's own top edge too, or stop short of it -
-        // ShowsButtons and Header Border Mode both legitimately want the header included (an
-        // activated widget's accent border, or Header Border Mode's own "tie every element
-        // together" scheme, both cover the whole widget). Otherwise - the plain, unengaged,
-        // Header-Border-Mode-off state - the header should only ever get a border from Light Border
-        // choosing to draw one below, not unconditionally from this stroke just because it happens
-        // to wrap the whole body shape.
-        var includeHeaderEdge = !TitleVisible || ShowsButtons || Style.HeaderBorderMode;
         using (var borderPen = new Pen(borderColor, ShowsButtons ? ActiveBorderWidth : 1f))
         {
             borderPen.LineJoin = LineJoin.Round;
@@ -781,20 +828,16 @@ internal abstract class LayeredWidgetForm : Form
             // comment on why), leaving no margin pixels there for that outward half to render into -
             // it was getting clipped by the window's own bitmap bounds. Inset keeps the whole stroke
             // within the body itself, which needs no such margin on any edge.
-            borderPen.Alignment = PenAlignment.Inset;
-            // Two different owned-path lifetimes here (body's own using-declared disposal vs. a
-            // fresh path scoped to just this branch), so this reuses body directly rather than
-            // assigning either into one shared `using` local, which would double-Dispose body once
-            // this method's own top-level `using var body` later runs too.
-            if (includeHeaderEdge)
-            {
-                g.DrawPath(borderPen, body);
-            }
-            else
-            {
-                using var bodyOnlyPath = RoundedRectPath.Bottom(ToWindow(new Rectangle(0, 0, contentWidth - 1, contentHeight - 1)), cornerRadius, TitleRowHeight);
-                g.DrawPath(borderPen, bodyOnlyPath);
-            }
+            //
+            // Always wraps the whole body (`body`, the full rounded rect), header included - a
+            // previous version stopped this stroke short of the header in the plain, unengaged,
+            // Header-Border-Mode-off state (RoundedRectPath.Bottom), leaving the header with no
+            // border of its own there at all. That read as a genuine misalignment, not a deliberate
+            // "cleaner" look: with only the body stroked, its edge sits this pen's own half-width
+            // inset from the fill, while the header's un-stroked edge is exactly at the fill's own
+            // (antialiased) boundary - a visible seam right where header meets body, on both the
+            // left and right sides. Wrapping the header too keeps both edges defined the same way.
+            g.DrawPath(borderPen, body);
         }
 
         // Light Border - see IWidgetStyle.LightBorder's own doc comment - a separate stroke around
@@ -802,11 +845,16 @@ internal abstract class LayeredWidgetForm : Form
         // included): drawn in ThemedBorder rather than ThemedTitle, since a ThemedTitle stroke would
         // blend invisibly into the title band's own ThemedTitle fill sitting right underneath it.
         // Always drawn when on, regardless of ShowsButtons - unlike the outer border, this isn't
-        // trying to double as an "engaged" indicator, just a persistent on/off accent.
-        if (TitleVisible && Style.LightBorder)
+        // trying to double as an "engaged" indicator, just a persistent on/off accent. Also gated on
+        // ShowLightBorderOption, not just Style.LightBorder itself - a subclass that turned the
+        // setting off (FolderFenceForm, whose header-only stroke never accounts for its own folder
+        // tab) needs this to actually stop rendering too, not just lose the menu row that used to
+        // toggle it - otherwise a fence that already had it on from before keeps showing it forever
+        // with no way left to turn it back off.
+        if (TitleVisible && Style.LightBorder && ShowLightBorderOption)
         {
             using var titleBorderPen = new Pen(ThemedBorder, 1f) { LineJoin = LineJoin.Round, Alignment = PenAlignment.Inset };
-            using var titleBorderPath = RoundedRectPath.Top(ToWindow(new Rectangle(0, 0, contentWidth - 1, TitleRowHeight)), cornerRadius);
+            using var titleBorderPath = GetHeaderFillPath(contentWidth, cornerRadius);
             g.DrawPath(titleBorderPen, titleBorderPath);
         }
 
@@ -827,7 +875,7 @@ internal abstract class LayeredWidgetForm : Form
             g.TextRenderingHint = TextRenderingHint.AntiAlias;
             using (var textBrush = new SolidBrush(Color.WhiteSmoke))
             using (var textFormat = new StringFormat { Alignment = alignment, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-                g.DrawString(Title, TitleFont, textBrush, ToWindow(new Rectangle(8, 0, TitleRowAvailableWidth(contentWidth), TitleRowHeight)), textFormat);
+                g.DrawString(DisplayTitle, TitleFont, textBrush, ToWindow(new Rectangle(8 + TitleTextInset, 0, TitleRowAvailableWidth(contentWidth), TitleRowHeight)), textFormat);
             g.TextRenderingHint = previousTextHint;
         }
 
@@ -1512,6 +1560,18 @@ internal abstract class LayeredWidgetForm : Form
     /// against instead of the OS's own incrementally-drifting proposed rect.</summary>
     protected abstract Rectangle GetCurrentBody();
 
+    /// <summary>What this widget offers as its OWN edges when a different widget is the one
+    /// dragging/resizing and looking for something to snap against (see GetOtherWidgetEdges) -
+    /// GetCurrentBody() itself by default. Deliberately a separate hook rather than just reusing
+    /// GetCurrentBody() directly there: that method is also the fixed anchor THIS widget's own
+    /// drag/resize/hit-test math measures against every tick (see DragStartBody/WriteBackWindowRect),
+    /// which has to keep meaning exactly "the plain body, matching OuterMargin/TopBand/BottomBand" -
+    /// changing what it returns would throw that off. A subclass whose visible silhouette extends
+    /// beyond its own plain body in a direction another widget should still be able to snap flush
+    /// against (FolderFenceForm's own folder tab, poking up above the header - see PaintFolderTab)
+    /// overrides this instead, leaving GetCurrentBody() itself untouched.</summary>
+    protected virtual Rectangle GetSnapTargetBody() => GetCurrentBody();
+
     /// <summary>This widget's own margin setting (IWidgetStyle.Margin) - how far it prefers to keep
     /// from another fence's edge or a custom snap line while dragging/resizing.</summary>
     protected abstract int SnapMargin { get; }
@@ -1583,7 +1643,7 @@ internal abstract class LayeredWidgetForm : Form
     /// that amount alongside the flush one - SnapEngine's own nearest-candidate-wins logic picks
     /// whichever of the two is actually closest. Not filtered by Visible - a hidden widget ("Show/Hide
     /// All") is still a valid snap target the same way FenceForm's own predecessor of this method
-    /// never bothered filtering for that either. GetCurrentBody() is read fresh per candidate (not
+    /// never bothered filtering for that either. GetSnapTargetBody() is read fresh per candidate (not
     /// cached anywhere) so a widget still mid-drag itself contributes its own latest position. Empty
     /// outright when Widget Manager's own Widget Snapping switch is off (Fences.SnapLines.
     /// WidgetEdgesEnabled) - the sole gate, so every caller (ComputeMovedBody/ComputeResizedBody/
@@ -1602,7 +1662,7 @@ internal abstract class LayeredWidgetForm : Form
             if (ReferenceEquals(widget, this))
                 continue;
 
-            var bounds = widget.GetCurrentBody();
+            var bounds = widget.GetSnapTargetBody();
             vertical.Add(bounds.Left);
             vertical.Add(bounds.Right);
             horizontal.Add(bounds.Top);
@@ -1706,8 +1766,46 @@ internal abstract class LayeredWidgetForm : Form
     /// settings.</summary>
     protected abstract string Title { get; set; }
 
+    /// <summary>What actually renders in the title band and drives its own click/hit-test rect
+    /// (TitleTextRect) - Title itself by default, for every widget with no reason to show anything
+    /// but its own bare rename-able name. A subclass whose header needs to show more than that
+    /// (FolderFenceForm's own breadcrumb while browsing a subfolder, say) overrides this instead of
+    /// Title itself, so BeginRename/OnRenameCommit's own EditBox still always seeds from and commits
+    /// to the real underlying name - never whatever extra text is only ever shown, not editable.</summary>
+    protected virtual string DisplayTitle => Title;
+
+    /// <summary>Extra left padding added on top of the title row's own fixed 8px margin - room for a
+    /// subclass's own hand-painted control sitting to the left of the title text inside the header
+    /// row itself (FolderFenceForm's own back button, say). 0 by default, meaning the title text
+    /// starts exactly where it always has for every other widget on this base.</summary>
+    protected virtual int TitleTextInset => 0;
+
+    /// <summary>How much of contentWidth the title row's own text-layout math (TitleRowAvailableWidth/
+    /// TitleTextRect) should treat as available - contentWidth itself by default. A subclass whose
+    /// header isn't a plain full-width band (FolderFenceForm's own folder-tab header, whose title
+    /// text needs to stay within the tab portion rather than spill into the transparent step down to
+    /// the lower shoulder) overrides this instead.</summary>
+    protected virtual int TitleRowWidth(int contentWidth) => contentWidth;
+
     /// <summary>Content-space height of the title row.</summary>
     protected abstract int TitleRowHeight { get; }
+
+    /// <summary>The body's own outline shape, content-relative in window space (see ToWindow) - a
+    /// plain rounded rectangle by default, used both for the border stroke around the whole widget
+    /// and (when TitleVisible is false) the body's own fill. A subclass whose window silhouette
+    /// isn't a plain rounded rectangle (FolderFenceForm's own folder-tab header, say) overrides this
+    /// together with GetHeaderFillPath below, so the border stroke/fill still trace one consistent
+    /// shape without this base needing to know anything about what that shape actually is. Caller
+    /// owns disposal.</summary>
+    protected virtual GraphicsPath GetBodyOutlinePath(int contentWidth, int contentHeight, int cornerRadius) =>
+        RoundedRectPath.Full(ToWindow(new Rectangle(0, 0, contentWidth - 1, contentHeight - 1)), cornerRadius);
+
+    /// <summary>The header/title band's own fill shape, content-relative in window space - rounded
+    /// on the top two corners only by default (RoundedRectPath.Top). Used for the header's own fill
+    /// and (when Style.LightBorder is on) its separate outline stroke, so both always agree with
+    /// whatever GetBodyOutlinePath's own header portion looks like. Caller owns disposal.</summary>
+    protected virtual GraphicsPath GetHeaderFillPath(int contentWidth, int cornerRadius) =>
+        RoundedRectPath.Top(ToWindow(new Rectangle(0, 0, contentWidth - 1, TitleRowHeight)), cornerRadius);
 
     /// <summary>Same family as Control.Font, sized to Style.TitleFontSize (see the "Header" flyout,
     /// BuildHeaderSettingsRows) - only the title text itself, its rename hit-test measurement, and
@@ -1735,7 +1833,7 @@ internal abstract class LayeredWidgetForm : Form
     /// Shared by PaintChrome's own title draw and TitleTextRect/BeginRename below so all three can
     /// never disagree about where the text is allowed to go.</summary>
     private int TitleRowAvailableWidth(int contentWidth) =>
-        Math.Max(0, (ShowHeaderCloseButton ? GetHeaderCloseButtonRect(contentWidth).Left - 4 : contentWidth - 8) - 8);
+        Math.Max(0, (ShowHeaderCloseButton ? GetHeaderCloseButtonRect(contentWidth).Left - 4 : TitleRowWidth(contentWidth) - 8) - 8 - TitleTextInset);
 
     /// <summary>The exact rect the title text renders into, content-relative - shifted per
     /// Style.TitleAlignment (Left/Center/Right) to match PaintChrome's own StringFormat-driven
@@ -1744,12 +1842,13 @@ internal abstract class LayeredWidgetForm : Form
     private Rectangle TitleTextRect(int contentWidth)
     {
         var available = TitleRowAvailableWidth(contentWidth);
-        var textWidth = Math.Min(available, TextRenderer.MeasureText(Title, TitleFont).Width);
+        var textWidth = Math.Min(available, TextRenderer.MeasureText(DisplayTitle, TitleFont).Width);
+        var left = 8 + TitleTextInset;
         var x = Style.TitleAlignment switch
         {
-            TitleAlignment.Center => 8 + (available - textWidth) / 2,
-            TitleAlignment.Right => 8 + available - textWidth,
-            _ => 8,
+            TitleAlignment.Center => left + (available - textWidth) / 2,
+            TitleAlignment.Right => left + available - textWidth,
+            _ => left,
         };
         return new Rectangle(x, 0, textWidth, TitleRowHeight);
     }
@@ -1880,6 +1979,18 @@ internal abstract class LayeredWidgetForm : Form
     protected virtual int SettingsButtonHeight => 22;
     protected virtual int SettingsButtonGap => 6;
 
+    /// <summary>Extra push further out from the body, on top of SettingsButtonGap, for the whole
+    /// Settings/Copy Settings/ExtraButtons row (every one of them chains its own Y off
+    /// GetSettingsButtonRect below, so this one hook moves them all together) - 0 by default. Only
+    /// meaningful in the not-flipped (top) case; a subclass has no reason to need it in the
+    /// ButtonRowAtBottom case too, since that's a plain body edge with nothing else living there.
+    /// FolderFenceForm's own folder tab (see PaintFolderTab) is the reason this exists: without it,
+    /// the button row and the tab both want roughly the same content-Y band above the header,
+    /// overlapping/visually colliding whenever the button happens to be on the same side as the
+    /// tab (its default top-right placement is usually clear of it, but flips to top-left - see
+    /// ShouldSettingsButtonOpenLeft - whenever the Settings dropdown wouldn't otherwise fit).</summary>
+    protected virtual int SettingsButtonRowInset => 0;
+
     /// <summary>Content-relative, positioned just outside the visible body, in the reserved button
     /// band - lives outside the visible body entirely, right down to the Y formula (negative - above
     /// content Y=0 normally, or below the body's own bottom edge instead once ButtonRowAtBottom
@@ -1889,7 +2000,9 @@ internal abstract class LayeredWidgetForm : Form
     /// always agree).</summary>
     protected Rectangle GetSettingsButtonRect(int contentWidth, bool onLeft)
     {
-        var y = ButtonRowAtBottom ? GetContentSize().Height + SettingsButtonGap : -(SettingsButtonHeight + SettingsButtonGap);
+        var y = ButtonRowAtBottom
+            ? GetContentSize().Height + SettingsButtonGap
+            : -(SettingsButtonHeight + SettingsButtonGap + SettingsButtonRowInset);
         return onLeft
             ? new Rectangle(0, y, SettingsButtonWidth, SettingsButtonHeight)
             : new Rectangle(contentWidth - SettingsButtonWidth, y, SettingsButtonWidth, SettingsButtonHeight);
@@ -2212,8 +2325,18 @@ internal abstract class LayeredWidgetForm : Form
             // Re-decided against the proposed rect's own new position - a drag that crosses the
             // "would go off the top of the screen" threshold mid-tick flips right here, so
             // WriteBackWindowRect (next) already inflates using whichever side the button band
-            // belongs on now, not wherever it was a moment ago.
-            ButtonRowAtBottom = ComputeButtonRowAtBottom(body.Location, MaxTopBand);
+            // belongs on now, not wherever it was a moment ago. Checked for an actual change before
+            // reassigning (not just reassigned unconditionally) because a plain move never fires
+            // WM_SIZE on its own the way a resize does - nothing else would otherwise notice this
+            // flip and repaint, leaving the button row (and, for FolderFenceForm, its own tab)
+            // visibly painted on the wrong side/band until something unrelated finally repaints,
+            // same "doesn't become visible for free" reasoning as _draggedSettingsButtonOnLeft below.
+            var newButtonRowAtBottom = ComputeButtonRowAtBottomFor(body);
+            if (newButtonRowAtBottom != ButtonRowAtBottom)
+            {
+                ButtonRowAtBottom = newButtonRowAtBottom;
+                RenderAndPresent();
+            }
             WriteBackWindowRect(m.LParam, body);
             m.Result = (IntPtr)1;
 
@@ -2249,7 +2372,7 @@ internal abstract class LayeredWidgetForm : Form
                 (edges & SnapEdges.Right) != 0 ? start.Right + dx : start.Right,
                 (edges & SnapEdges.Bottom) != 0 ? start.Bottom + dy : start.Bottom);
             var body = ComputeResizedBody(proposed, edges);
-            ButtonRowAtBottom = ComputeButtonRowAtBottom(body.Location, MaxTopBand);
+            ButtonRowAtBottom = ComputeButtonRowAtBottomFor(body);
             WriteBackWindowRect(m.LParam, body);
             m.Result = (IntPtr)1;
             return;

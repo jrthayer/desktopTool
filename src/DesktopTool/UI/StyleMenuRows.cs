@@ -63,7 +63,8 @@ internal static class StyleMenuRows
         Action<int> onOpacityChange,
         Action<int> onTintStrengthChange,
         Action<int> onCornerRadiusChange,
-        Action<int> onMarginChange)
+        Action<int> onMarginChange,
+        int cornerRadiusMax = 50)
     {
         var rows = BuildColorGrid(style, defaultSwatch, colorDefaultId, colorCustomId, colorEyedropId, colorPresetBaseId);
 
@@ -85,7 +86,7 @@ internal static class StyleMenuRows
         rows.Add(new DropdownMenu.Row(0, "Corner Radius", IsHeader: true));
         rows.Add(new DropdownMenu.Row(0, string.Empty, IsStepper: true,
             StepperValue: () => style.CornerRadius, OnStepperChange: onCornerRadiusChange,
-            StepperMin: 0, StepperMax: 50, StepperStep: 1, StepperSuffix: "px"));
+            StepperMin: 0, StepperMax: cornerRadiusMax, StepperStep: 1, StepperSuffix: "px"));
 
         rows.Add(new DropdownMenu.Row(0, string.Empty, IsSeparator: true));
         rows.Add(new DropdownMenu.Row(0, "Margin", IsHeader: true));

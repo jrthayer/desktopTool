@@ -1,4 +1,5 @@
 using DesktopTool.Features.Fences;
+using DesktopTool.Features.FolderFences;
 using DesktopTool.Features.Layouts;
 using DesktopTool.Features.Layouts.UI;
 using DesktopTool.Features.Readme.UI;
@@ -12,7 +13,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
 {
     private readonly NotifyIcon _trayIcon;
     private readonly FenceManager _fenceManager = new();
+    // Only ever hands _fenceManager to a FolderFenceForm's own base constructor, for the shared
+    // snap-against-other-widgets behavior every LayeredWidgetForm gets for free - see
+    // FolderFenceManager's own constructor doc comment.
+    private readonly FolderFenceManager _folderFenceManager;
     private readonly LayoutManager _layoutManager = new();
+
     private readonly LayoutLauncherStore _layoutLauncherStore = new();
     private readonly WidgetManagerStore _widgetManagerStore = new();
 
@@ -40,6 +46,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     public TrayApplicationContext()
     {
+        _folderFenceManager = new FolderFenceManager(_fenceManager);
+
         _layoutManager.Load();
         _layoutManager.LaunchFailed += OnLayoutLaunchFailed;
 
@@ -50,7 +58,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // Needs _layoutLauncher to already exist - its own Fences row reads/toggles that widget's
         // Visible directly rather than through a separate manager class.
         var widgetManagerModel = _widgetManagerStore.Load();
-        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, widgetManagerModel, _widgetManagerStore);
+        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
         _widgetManager.EditLayoutsRequested += (_, _) => OpenLayoutEditor(null);
         _widgetManager.HelpRequested += (_, _) => OpenReadme();
 
@@ -108,6 +116,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _trayIcon.DoubleClick += OnShowHideAll;
 
         _fenceManager.LoadAndShowAll();
+        _folderFenceManager.LoadAndShowAll();
 
         // Only actually shown if it was left visible last session - Show() itself doesn't touch
         // Visible in the model the way ToggleVisible does, so this doesn't re-persist a value that's
@@ -172,8 +181,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _readmeForm.Show();
     }
 
-    private void OnShowHideAll(object? sender, EventArgs e) =>
-        _fenceManager.SetAllVisible(!_fenceManager.AnyVisible);
+    private void OnShowHideAll(object? sender, EventArgs e)
+    {
+        var visible = !(_fenceManager.AnyVisible || _folderFenceManager.AnyVisible);
+        _fenceManager.SetAllVisible(visible);
+        _folderFenceManager.SetAllVisible(visible);
+    }
 
     private void OnExit(object? sender, EventArgs e)
     {
@@ -184,6 +197,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _layoutLauncher.Shutdown();
         _widgetManager.Shutdown();
         _fenceManager.Dispose();
+        _folderFenceManager.Dispose();
         ExitThread();
     }
 }

@@ -1,6 +1,7 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using DesktopTool.Features.Fences;
+using DesktopTool.Features.FolderFences;
 using DesktopTool.Features.Layouts.UI;
 using DesktopTool.Native;
 using DesktopTool.UI;
@@ -41,6 +42,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private const int ListRowHeightConst = 30;
 
     private readonly LayoutLauncherWidget _layoutLauncher;
+    private readonly FolderFenceManager _folderFences;
     private readonly WidgetManagerModel _model;
     private readonly WidgetManagerStore _store;
 
@@ -48,17 +50,23 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private bool _settingsButtonArmed;
 
     // Cog for an "open an editor" action (Snap Lines/Layout Launcher), Plus for an "add one more"
-    // action (Fences), None for a row with no editor of its own (Widget Snapping - a plain on/off
-    // with nowhere to go) - see PaintCogGlyph/PaintPlusGlyph/PaintRowButton.
-    private enum RowButtonIcon { Plus, Cog, None }
+    // action (Fences), Folder for "add a folder fence" (Fences' own second button), None for a row
+    // with no editor of its own (Widget Snapping - a plain on/off with nowhere to go) - see
+    // PaintCogGlyph/PaintPlusGlyph/PaintFolderGlyph/PaintRowButton.
+    private enum RowButtonIcon { Plus, Cog, Folder, None }
 
-    private readonly record struct WidgetRow(string Label, string ButtonTooltip, RowButtonIcon ButtonIcon);
+    // SecondButtonIcon/SecondButtonTooltip only ever populated for the Fences row (index 0) -
+    // every other row leaves them at their None/empty defaults, so GetRowLabelRect/PaintListRow's
+    // own "is there a second button" checks stay false for the rest.
+    private readonly record struct WidgetRow(
+        string Label, string ButtonTooltip, RowButtonIcon ButtonIcon,
+        RowButtonIcon SecondButtonIcon = RowButtonIcon.None, string SecondButtonTooltip = "");
 
     // Fence Trash Can last - IsRowOn/ToggleRow/FireRowButtonAction's own index switches below must
     // stay in this same order.
     private static readonly WidgetRow[] Rows =
     {
-        new("Fences", "Add Fence", RowButtonIcon.Plus),
+        new("Fences", "Add Fence", RowButtonIcon.Plus, RowButtonIcon.Folder, "Add Folder Fence"),
         new("Layout Launcher", "Edit Layouts", RowButtonIcon.Cog),
         new("Snap Lines", "Edit Snap Lines", RowButtonIcon.Cog),
         new("Widget Snapping", string.Empty, RowButtonIcon.None),
@@ -70,7 +78,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     // other button on this base (armed on OnMouseDown, fired on the matching OnMouseUp only if the
     // cursor is still over the same target), just local to this widget rather than a
     // LayeredWidgetForm mechanism - see LayoutLauncherWidget's own RowAction for the precedent.
-    private enum RowTarget { None, Switch, Button }
+    private enum RowTarget { None, Switch, Button, SecondButton }
     private RowTarget _armedRowTarget = RowTarget.None;
     private int _armedRowIndex = -1;
 
@@ -106,10 +114,11 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// rows read from - WidgetManagerModel already implements IWidgetStyle.</summary>
     protected override IWidgetStyle Style => _model;
 
-    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, WidgetManagerModel model, WidgetManagerStore store)
+    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
         : base(model.Opacity / 100f, fenceManager)
     {
         _layoutLauncher = layoutLauncher;
+        _folderFences = folderFences;
         _model = model;
         _store = store;
 
@@ -590,12 +599,23 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         return new Rectangle(switchRect.X - ButtonRightGap - ButtonSize, y, ButtonSize, ButtonSize);
     }
 
-    /// <summary>The row's own label area - from the row's own left padding up to where its action
-    /// button starts, or (hasButton false, e.g. Widget Snapping) straight up to the switch itself,
-    /// since there's no button rect to stop at.</summary>
-    private static Rectangle GetRowLabelRect(Rectangle rowRect, bool hasButton)
+    /// <summary>Chained immediately left of the row's own (first) action button - only the Fences
+    /// row ever has one (WidgetRow.SecondButtonIcon), same "chain rects leftward" pattern FenceForm's
+    /// own Settings/Copy/+/x row already uses.</summary>
+    private static Rectangle GetSecondRowButtonRect(Rectangle rowRect)
     {
-        var stopX = hasButton ? GetRowButtonRect(rowRect).X : GetRowSwitchRect(rowRect).X;
+        var firstButtonRect = GetRowButtonRect(rowRect);
+        return new Rectangle(firstButtonRect.X - ButtonRightGap - ButtonSize, firstButtonRect.Y, ButtonSize, ButtonSize);
+    }
+
+    /// <summary>The row's own label area - from the row's own left padding up to wherever its
+    /// buttons start (the second one if it has one, otherwise the first, otherwise straight up to
+    /// the switch itself when there's no button rect to stop at at all - e.g. Widget Snapping).</summary>
+    private static Rectangle GetRowLabelRect(Rectangle rowRect, bool hasButton, bool hasSecondButton)
+    {
+        var stopX = hasSecondButton ? GetSecondRowButtonRect(rowRect).X
+            : hasButton ? GetRowButtonRect(rowRect).X
+            : GetRowSwitchRect(rowRect).X;
         var width = Math.Max(0, stopX - 8 - rowRect.X - 8);
         return new Rectangle(rowRect.X + 8, rowRect.Y, width, rowRect.Height);
     }
@@ -642,18 +662,22 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
         if (GetRowSwitchRect(rowRect).Contains(contentPoint))
             return (RowTarget.Switch, index);
+        if (Rows[index].SecondButtonIcon != RowButtonIcon.None && GetSecondRowButtonRect(rowRect).Contains(contentPoint))
+            return (RowTarget.SecondButton, index);
         if (Rows[index].ButtonIcon != RowButtonIcon.None && GetRowButtonRect(rowRect).Contains(contentPoint))
             return (RowTarget.Button, index);
         return (RowTarget.None, -1);
     }
 
-    /// <summary>Whether row index's widget is currently "on" - Fences: at least one fence visible
-    /// (see FenceManager.AnyVisible); Layout Launcher: the widget's own Visible; Snap Lines:
-    /// SnapLineManager.Enabled; Widget Snapping: SnapLineManager.WidgetEdgesEnabled; Fence Trash
-    /// Can: FenceManager.HasRecycleBin. Same row order as Rows above.</summary>
+    /// <summary>Whether row index's widget is currently "on" - Fences: at least one fence OR
+    /// folder fence visible (see FenceManager.AnyVisible/FolderFenceManager.AnyVisible - a folder
+    /// fence is conceptually a kind of fence, so the two show/hide together under this one switch);
+    /// Layout Launcher: the widget's own Visible; Snap Lines: SnapLineManager.Enabled; Widget
+    /// Snapping: SnapLineManager.WidgetEdgesEnabled; Fence Trash Can: FenceManager.HasRecycleBin.
+    /// Same row order as Rows above.</summary>
     private bool IsRowOn(int index) => index switch
     {
-        0 => Fences.AnyVisible,
+        0 => Fences.AnyVisible || _folderFences.AnyVisible,
         1 => _layoutLauncher.Visible,
         2 => Fences.SnapLines.Enabled,
         3 => Fences.SnapLines.WidgetEdgesEnabled,
@@ -665,7 +689,11 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     {
         switch (index)
         {
-            case 0: Fences.SetAllVisible(!Fences.AnyVisible); break;
+            case 0:
+                var visible = !(Fences.AnyVisible || _folderFences.AnyVisible);
+                Fences.SetAllVisible(visible);
+                _folderFences.SetAllVisible(visible);
+                break;
             case 1: _layoutLauncher.ToggleVisible(); break;
             case 2: Fences.SnapLines.SetEnabled(!Fences.SnapLines.Enabled); break;
             case 3: Fences.SnapLines.SetWidgetEdgesEnabled(!Fences.SnapLines.WidgetEdgesEnabled); break;
@@ -685,6 +713,14 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             // 3 (Widget Snapping) and 4 (Fence Trash Can) have no action button - RowButtonIcon.
             // None, never hit-testable.
         }
+    }
+
+    /// <summary>The Fences row's own second button (see WidgetRow.SecondButtonIcon) - no other row
+    /// has one yet, so this is a plain single-case dispatch rather than a switch.</summary>
+    private void FireSecondRowButtonAction(int index)
+    {
+        if (index == 0)
+            _folderFences.CreateFolderFence();
     }
 
     /// <summary>Switch flips that row's own on/off state and repaints (the switch's own fill/label
@@ -707,6 +743,9 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case RowTarget.Button:
                 FireRowButtonAction(index);
                 break;
+            case RowTarget.SecondButton:
+                FireSecondRowButtonAction(index);
+                break;
         }
     }
 
@@ -725,6 +764,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         {
             RowTarget.Switch => _rowTooltip.Show(SwitchTooltipText(index), ToWindow(GetRowSwitchRect(GetRowRectFor(index)))),
             RowTarget.Button => _rowTooltip.Show(Rows[index].ButtonTooltip, ToWindow(GetRowButtonRect(GetRowRectFor(index)))),
+            RowTarget.SecondButton => _rowTooltip.Show(Rows[index].SecondButtonTooltip, ToWindow(GetSecondRowButtonRect(GetRowRectFor(index)))),
             _ => _rowTooltip.Hide(),
         };
 
@@ -756,14 +796,18 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
         var icon = Rows[index].ButtonIcon;
         var hasButton = icon != RowButtonIcon.None;
+        var secondIcon = Rows[index].SecondButtonIcon;
+        var hasSecondButton = secondIcon != RowButtonIcon.None;
 
         var previousTextHint = g.TextRenderingHint;
         g.TextRenderingHint = TextRenderingHint.AntiAlias;
         using (var textBrush = new SolidBrush(Color.WhiteSmoke))
         using (var textFormat = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString(Rows[index].Label, Font, textBrush, GetRowLabelRect(rowRect, hasButton), textFormat);
+            g.DrawString(Rows[index].Label, Font, textBrush, GetRowLabelRect(rowRect, hasButton, hasSecondButton), textFormat);
         g.TextRenderingHint = previousTextHint;
 
+        if (hasSecondButton)
+            PaintRowButton(g, GetSecondRowButtonRect(rowRect), secondIcon);
         if (hasButton)
             PaintRowButton(g, GetRowButtonRect(rowRect), icon);
         PaintRowSwitch(g, GetRowSwitchRect(rowRect), IsRowOn(index), rowBackground);
@@ -783,6 +827,9 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case RowButtonIcon.Cog:
                 PaintCogGlyph(g, rect);
                 break;
+            case RowButtonIcon.Folder:
+                PaintFolderGlyph(g, rect);
+                break;
         }
     }
 
@@ -797,6 +844,36 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         using var pen = new Pen(Color.WhiteSmoke, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         g.DrawLine(pen, cx - half, cy, cx + half, cy);
         g.DrawLine(pen, cx, cy - half, cx, cy + half);
+    }
+
+    /// <summary>"Add Folder Fence" - a simple folder outline (body + a small tab on top-left), same
+    /// hand-drawn-shape convention as PaintPlusGlyph/PaintCogGlyph.</summary>
+    private static void PaintFolderGlyph(Graphics g, Rectangle rect)
+    {
+        var cx = rect.X + rect.Width / 2f;
+        var cy = rect.Y + rect.Height / 2f;
+        var w = rect.Width * 0.5f;
+        var h = rect.Height * 0.36f;
+        var tabW = w * 0.45f;
+        var tabH = h * 0.35f;
+
+        var previousSmoothing = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var pen = new Pen(Color.WhiteSmoke, 1.4f) { LineJoin = LineJoin.Round };
+
+        var left = cx - w / 2;
+        var top = cy - h / 2 + tabH / 2;
+        using var path = new GraphicsPath();
+        path.AddLine(left, top, left, top - tabH);
+        path.AddLine(left, top - tabH, left + tabW, top - tabH);
+        path.AddLine(left + tabW, top - tabH, left + tabW + tabH, top);
+        path.AddLine(left + tabW + tabH, top, left + w, top);
+        path.AddLine(left + w, top, left + w, top + h);
+        path.AddLine(left + w, top + h, left, top + h);
+        path.CloseFigure();
+        g.DrawPath(pen, path);
+
+        g.SmoothingMode = previousSmoothing;
     }
 
     /// <summary>"Edit Snap Lines"/"Edit Layouts" - a simplified gear: an outer ring, a smaller inner
