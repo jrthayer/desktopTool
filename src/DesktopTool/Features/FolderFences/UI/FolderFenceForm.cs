@@ -1275,10 +1275,18 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     private int? IndexAtGridPosition(Point contentLocation)
     {
-        if (_entries.Count == 0 || contentLocation.Y < GridTop)
+        if (_entries.Count == 0)
             return null;
 
-        var columns = GetColumns(GetContentSize().Width);
+        var contentSize = GetContentSize();
+        // Bounded against the actual visible/scrolled viewport, not just a Y >= GridTop floor - a
+        // point below the grid (a bar button sitting in the margin band, say) would otherwise still
+        // resolve to a real, scrolled-out-of-view index purely by arithmetic, wrongly hover-
+        // highlighting an item nobody's actually pointing at.
+        if (!GridViewport(contentSize.Width, contentSize.Height).Contains(contentLocation))
+            return null;
+
+        var columns = GetColumns(contentSize.Width);
         var column = (contentLocation.X - GridPadding) / CellWidth;
         var row = (contentLocation.Y - GridTop - GridPadding + _scrollbar.Offset) / EffectiveCellHeight;
         if (column < 0 || column >= columns || row < 0)
