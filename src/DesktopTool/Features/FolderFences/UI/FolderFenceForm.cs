@@ -115,6 +115,12 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     protected override int BottomBand => ButtonRowAtBottom ? TopMargin : OuterMargin;
     protected override int MaxTopBand => TopMarginWithTab;
 
+    /// <summary>A small bump over the base's plain 1px/ActiveBorderWidth - see BorderWidth's own doc
+    /// comment on the base. GetBodyOutlinePath's diagonal tab cut is the only non-orthogonal segment
+    /// in the whole outline, so at the base's stock width it visibly reads as thinner than the rest
+    /// of the same single stroke.</summary>
+    protected override float BorderWidth => base.BorderWidth + 0.6f;
+
     /// <summary>The button row's own default position is the BOTTOM band (see TopBand's own
     /// comment) - the base's usual "default top, flip to bottom near the top of the screen" trade
     /// doesn't fit here, since the tab always needs its own reserved space up top regardless of
@@ -170,7 +176,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     /// faint seam where each one's own partial-coverage edge pixels don't quite agree, the same
     /// "double antialiasing" issue PaintChrome's own body/title fill order used to have (see
     /// RoundedRectPath.BottomFilled's own doc comment) - one path stroked once is the only way to
-    /// avoid it. PaintFolderTab only fills the tab now; this is what actually borders it. Falls back
+    /// avoid it. GetHeaderFillPath fills the tab (and header) now; this is what actually borders it. Falls back
     /// to the base's plain rounded rectangle only when the tab itself never shows at all
     /// (HideHeader) - unlike most of this widget's other tab-aware hooks, this one does NOT also
     /// check ButtonRowAtBottom: TopBand always reserves at least TopMarginTabOnly for the tab
@@ -208,15 +214,45 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         return path;
     }
 
-    /// <summary>The header's own fill shape - square top-left corner instead of the base's usual
-    /// rounded one (see RoundedRectPath.TopSquareTopLeft's own doc comment for why: the tab sits
-    /// entirely above the header, never overlapping down into it, so a rounded cutout here has
-    /// nothing else covering it). Only ever called while TitleVisible is already true (see
-    /// PaintChrome), and (see GetBodyOutlinePath's own comment) the tab is showing regardless of
-    /// ButtonRowAtBottom now, so this never needs to fall back to the base's own rounded corner.</summary>
+    /// <summary>The header's own fill shape, PLUS the tab's - square top-left corner on the header
+    /// part instead of the base's usual rounded one (see RoundedRectPath.TopSquareTopLeft's own doc
+    /// comment for why: the tab sits entirely above the header, never overlapping down into it, so a
+    /// rounded cutout here has nothing else covering it), with the tab's own rounded-top-left/
+    /// diagonal-cut shape appended as a second closed figure on the same path (StartFigure - the
+    /// header shape above already ends in its own CloseFigure). Both figures fill in the same
+    /// ThemedTitle color and never overlap, so combining them into one path/one FillPath call (see
+    /// PaintChrome's own header-fill step) is exactly equivalent to painting them separately - this
+    /// used to be two independent calls (this method for the header, a since-removed PaintFolderTab
+    /// for the tab), which was harmless for the fill itself (no seam risk between two same-colored
+    /// same-opacity fills - unlike GetBodyOutlinePath's border stroke, where two independently-
+    /// antialiased strokes DO disagree at their shared boundary) but meant PaintContent needed its
+    /// own extra "if (TitleVisible) PaintFolderTab(...)" call that this removes.
+    ///
+    /// The tab geometry here must stay in lockstep with GetBodyOutlinePath's own tab segments (same
+    /// tabWidth/diagonalRun/tabRadius math) - they trace the same edge, one as a fill boundary and
+    /// one as a border stroke centered (well, inset) on it. Only ever called while TitleVisible is
+    /// already true (see PaintChrome), and (see GetBodyOutlinePath's own comment) the tab is showing
+    /// regardless of ButtonRowAtBottom now, so this never needs to fall back to the base's own
+    /// rounded corner.</summary>
     protected override GraphicsPath GetHeaderFillPath(int contentWidth, int cornerRadius)
     {
-        return RoundedRectPath.TopSquareTopLeft(ToWindow(new Rectangle(0, 0, contentWidth - 1, TitleRowHeight)), cornerRadius);
+        var path = RoundedRectPath.TopSquareTopLeft(ToWindow(new Rectangle(0, 0, contentWidth - 1, TitleRowHeight)), cornerRadius);
+
+        var tabWidth = GetTabWidth(contentWidth);
+        var bounds = ToWindow(new Rectangle(0, -TabExtraHeight, tabWidth, TabExtraHeight));
+        var diagonalRun = Math.Min(TabExtraHeight, bounds.Width);
+        var tabRadius = Math.Max(0, Math.Min(cornerRadius, Math.Min(bounds.Height, bounds.Width - diagonalRun) / 2));
+        var d = tabRadius * 2;
+
+        path.StartFigure();
+        if (tabRadius > 0)
+            path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
+        path.AddLine(bounds.X + tabRadius, bounds.Y, bounds.Right - diagonalRun, bounds.Y);
+        path.AddLine(bounds.Right - diagonalRun, bounds.Y, bounds.Right, bounds.Bottom);
+        path.AddLine(bounds.Right, bounds.Bottom, bounds.X, bounds.Bottom);
+        path.CloseFigure();
+
+        return path;
     }
 
     /// <summary>The "<-" glyph's own rect, content-relative - sits inside the header row itself, to
@@ -1091,13 +1127,11 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     {
         _scrollbar.ClampToMax(GetMaxScroll(contentWidth, contentHeight));
 
-        // Body/title fill, border, title text, and the Settings/Copy Settings/"−"/"×" buttons are
-        // all LayeredWidgetForm's own - this only draws what's genuinely folder-fence-specific: the
-        // empty-state "+" or the item grid, plus the "−"/"×" hover tooltip on top of everything.
+        // Body/title fill (tab included - see GetHeaderFillPath), border, title text, and the
+        // Settings/Copy Settings/"−"/"×" buttons are all LayeredWidgetForm's own - this only draws
+        // what's genuinely folder-fence-specific: the empty-state "+" or the item grid, plus the
+        // "−"/"×" hover tooltip on top of everything.
         PaintChrome(g, contentWidth, contentHeight);
-
-        if (TitleVisible)
-            PaintFolderTab(g, contentWidth);
 
         if (_currentSubPath is not null && TitleVisible)
             PaintBackButton(g);
@@ -1207,35 +1241,5 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         g.DrawLine(pen, left + headSize, cy - headSize, left, cy);
         g.DrawLine(pen, left + headSize, cy + headSize, left, cy);
         g.SmoothingMode = previousSmoothing;
-    }
-
-    /// <summary>The manila-folder tab's own fill - a rounded top-left corner (matching the fence's
-    /// own Style.CornerRadius, same as every other outer corner on this widget), a flat top, and a
-    /// diagonal cut down its own right side - sitting flush on top of the header's own (otherwise
-    /// perfectly plain) top edge, in the extra margin space TopBand reserves for it (see
-    /// TopMarginWithTab). Fill only, same ThemedTitle as the header - the border is GetBodyOutlinePath's
-    /// own job now, stroked once as a single path covering the tab and the rest of the widget's
-    /// outline together (see that method's own doc comment for why a second, separate border stroke
-    /// here would leave a seam). TopBand always reserves at least enough room for this regardless of
-    /// ButtonRowAtBottom now (see its own comment), so this only needs to check that the widget has
-    /// a header at all - called from PaintContent's own "if (TitleVisible)" guard already.</summary>
-    private void PaintFolderTab(Graphics g, int contentWidth)
-    {
-        var tabWidth = GetTabWidth(contentWidth);
-        var bounds = ToWindow(new Rectangle(0, -TabExtraHeight, tabWidth, TabExtraHeight));
-        var diagonalRun = Math.Min(TabExtraHeight, bounds.Width);
-        var cornerRadius = Math.Max(0, Math.Min(Style.CornerRadius, Math.Min(bounds.Height, bounds.Width - diagonalRun) / 2));
-        var d = cornerRadius * 2;
-
-        using var tabPath = new GraphicsPath();
-        if (cornerRadius > 0)
-            tabPath.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
-        tabPath.AddLine(bounds.X + cornerRadius, bounds.Y, bounds.Right - diagonalRun, bounds.Y);
-        tabPath.AddLine(bounds.Right - diagonalRun, bounds.Y, bounds.Right, bounds.Bottom);
-        tabPath.AddLine(bounds.Right, bounds.Bottom, bounds.X, bounds.Bottom);
-        tabPath.CloseFigure();
-
-        using var fill = new SolidBrush(ThemedTitle);
-        g.FillPath(fill, tabPath);
     }
 }

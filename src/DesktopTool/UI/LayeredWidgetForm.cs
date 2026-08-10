@@ -433,6 +433,15 @@ internal abstract class LayeredWidgetForm : Form
     /// the same value.</summary>
     protected virtual float ActiveBorderWidth => 8f;
 
+    /// <summary>The outer body border's actual stroke width for the current state - ActiveBorderWidth
+    /// while engaged, a plain 1px otherwise. Its own hook (rather than PaintChrome just inlining this
+    /// ternary) so a subclass whose own GetBodyOutlinePath includes a non-orthogonal segment
+    /// (FolderFenceForm's diagonal tab cut) can bump it slightly across the board - GDI+ renders a
+    /// diagonal stroke with visibly less antialiased coverage than a horizontal/vertical one at the
+    /// same nominal width, so the tab's own edge reads as thinner than the rest of the same,
+    /// single-stroked path unless this compensates.</summary>
+    protected virtual float BorderWidth => ShowsButtons ? ActiveBorderWidth : 1f;
+
     /// <summary>Only shows engagement chrome (the Settings button, an active-state border) while
     /// actually engaged - see WidgetActivation's own doc comment for why right-click/title-click
     /// specifically, not plain OS focus.</summary>
@@ -819,7 +828,7 @@ internal abstract class LayeredWidgetForm : Form
         // ThemedActiveBorder is how an activated widget reads at all, so Header Border Mode only
         // replaces the plain inactive-state ThemedBorder, never this.
         var borderColor = ShowsButtons ? ThemedActiveBorder : (Style.HeaderBorderMode ? ThemedTitle : ThemedBorder);
-        using (var borderPen = new Pen(borderColor, ShowsButtons ? ActiveBorderWidth : 1f))
+        using (var borderPen = new Pen(borderColor, BorderWidth))
         {
             borderPen.LineJoin = LineJoin.Round;
             // Inset, not the default Center - a centered stroke needs half its own width to bleed
