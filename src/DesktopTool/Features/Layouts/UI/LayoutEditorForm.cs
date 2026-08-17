@@ -33,6 +33,7 @@ internal sealed class LayoutEditorForm : Form
     private readonly ListBox _commandList;
     private readonly TextBox _commandInputBox;
     private readonly Button _addCommandButton;
+    private readonly Button _addTabButton;
     private readonly Label _terminalShellLabel;
     private readonly ComboButton _terminalShellCombo;
     private readonly CheckBox _minimizedCheck;
@@ -205,10 +206,12 @@ internal sealed class LayoutEditorForm : Form
 
         // Same shape as the URL group above (see WindowPlacer.BuildTerminalCommandArgs), shown only
         // for an entry whose program resolves to a recognized terminal (WindowPlacer.IsTerminalProgram)
-        // - one row per command, run in order and left open afterward rather than opened as tabs,
-        // since a shell has no tab concept.
+        // - one row per command, run in order and left open afterward. A blank row (added via "Tab"
+        // rather than typed - see AddTabSeparator) splits the commands around it into separate
+        // WindowsTerminal.exe tabs; for a directly-captured cmd.exe/powershell.exe/pwsh.exe console
+        // (no tab concept of its own) it's ignored and every row just runs in the one sequence.
         _commandLabel = new Label { Text = "Commands to run (terminal only)", Location = new Point(222, 320), AutoSize = true, Visible = false };
-        _commandList = CreateList(new Rectangle(222, 340, 362, 70), removable: true);
+        _commandList = CreateList(new Rectangle(222, 340, 362, 70), removable: true, drawItem: DrawCommandListItem);
         _commandList.Visible = false;
         _commandList.MouseDown += (_, e) =>
         {
@@ -216,7 +219,7 @@ internal sealed class LayoutEditorForm : Form
                 RemoveCommandAt(index);
         };
 
-        _commandInputBox = CreateTextBox(new Rectangle(222, 416, 290, 24));
+        _commandInputBox = CreateTextBox(new Rectangle(222, 416, 214, 24));
         _commandInputBox.Visible = false;
         _commandInputBox.KeyDown += (_, e) =>
         {
@@ -227,8 +230,15 @@ internal sealed class LayoutEditorForm : Form
             e.SuppressKeyPress = true;
         };
 
-        _addCommandButton = new DarkButton { Text = "Add", Location = new Point(518, 416), Width = 66, Height = 24, Visible = false };
+        _addCommandButton = new DarkButton { Text = "Add", Location = new Point(442, 416), Width = 66, Height = 24, Visible = false };
         _addCommandButton.Click += (_, _) => CommitCommandInput();
+
+        // Only meaningful for a WindowsTerminal.exe entry (see the Commands comment above) but shown
+        // for any terminal entry regardless - a directly-captured console just ignores the separator
+        // it adds, same as it ignores one typed in by hand on old data, rather than hiding a button
+        // whose effect quietly depends on the Shell picker's own visibility.
+        _addTabButton = new DarkButton { Text = "New Tab", Location = new Point(514, 416), Width = 70, Height = 24, Visible = false };
+        _addTabButton.Click += (_, _) => AddTabSeparator();
 
         // Only shown for an entry captured as WindowsTerminal.exe, alongside the Commands group
         // above (never for a directly-captured cmd.exe/powershell.exe/pwsh.exe entry, whose shell
@@ -257,7 +267,7 @@ internal sealed class LayoutEditorForm : Form
         foreach (var button in new[]
         {
             newProfileButton, _deleteProfileButton, selectWindowButton, _removeEntryButton, browseButton,
-            _addUrlButton, _addCommandButton, _runButton, closeButton,
+            _addUrlButton, _addCommandButton, _addTabButton, _runButton, closeButton,
         })
             StyleButton(button);
 
@@ -267,7 +277,7 @@ internal sealed class LayoutEditorForm : Form
             separator, entriesLabel, _entryList, _warningBanner, selectWindowButton, _removeEntryButton, entrySeparator,
             pathLabel, _programPathBox, browseButton, monitorLabel, _monitorCombo, placementLabel, _placementCombo,
             _urlLabel, _urlList, _urlInputBox, _addUrlButton,
-            _commandLabel, _commandList, _commandInputBox, _addCommandButton,
+            _commandLabel, _commandList, _commandInputBox, _addCommandButton, _addTabButton,
             _terminalShellLabel, _terminalShellCombo,
             _minimizedCheck, _runButton, closeButton,
         });
@@ -408,6 +418,38 @@ internal sealed class LayoutEditorForm : Form
         var textRect = new Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width - glyphRect.Width, e.Bounds.Height);
         TextRenderer.DrawText(e.Graphics, list.Items[e.Index]!.ToString(), list.Font, textRect, AppTheme.Text,
             TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+        TextRenderer.DrawText(e.Graphics, "x", list.Font, glyphRect, AppTheme.Text,
+            TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
+    }
+
+    /// <summary>Same as DrawRemovableListItem, but a blank row (see AddTabSeparator) renders as a
+    /// dim centered "New Tab" caption instead of an empty clickable strip, so a tab break reads as a
+    /// deliberate break rather than a stray empty row - still keeps the same removable "x" glyph as
+    /// any other row, since TryGetRemoveClickIndex hit-tests the rect, not the row's text.</summary>
+    private static void DrawCommandListItem(object? sender, DrawItemEventArgs e)
+    {
+        var list = (ListBox)sender!;
+        var selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+        using (var background = new SolidBrush(selected ? AppTheme.Hover : AppTheme.Field))
+            e.Graphics.FillRectangle(background, e.Bounds);
+
+        if (e.Index < 0 || e.Index >= list.Items.Count)
+            return;
+
+        var glyphRect = GetRemoveGlyphRect(e.Bounds);
+        var textRect = new Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width - glyphRect.Width, e.Bounds.Height);
+        var text = list.Items[e.Index]!.ToString()!;
+        if (text.Length == 0)
+        {
+            TextRenderer.DrawText(e.Graphics, "── New Tab ──", list.Font, textRect, AppTheme.DisabledText,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
+        }
+        else
+        {
+            TextRenderer.DrawText(e.Graphics, text, list.Font, textRect, AppTheme.Text,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+        }
+
         TextRenderer.DrawText(e.Graphics, "x", list.Font, glyphRect, AppTheme.Text,
             TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
     }
@@ -651,6 +693,7 @@ internal sealed class LayoutEditorForm : Form
         _commandList.Enabled = enabled;
         _commandInputBox.Enabled = enabled;
         _addCommandButton.Enabled = enabled;
+        _addTabButton.Enabled = enabled;
         _terminalShellCombo.Enabled = enabled;
         _minimizedCheck.Enabled = enabled;
         if (!enabled)
@@ -663,6 +706,7 @@ internal sealed class LayoutEditorForm : Form
             _commandList.Visible = false;
             _commandInputBox.Visible = false;
             _addCommandButton.Visible = false;
+            _addTabButton.Visible = false;
             _terminalShellLabel.Visible = false;
             _terminalShellCombo.Visible = false;
         }
@@ -686,6 +730,7 @@ internal sealed class LayoutEditorForm : Form
         _commandList.Visible = isTerminal;
         _commandInputBox.Visible = isTerminal;
         _addCommandButton.Visible = isTerminal;
+        _addTabButton.Visible = isTerminal;
 
         var isWindowsTerminal = isTerminal && WindowPlacer.IsWindowsTerminalProgram(entry.ProgramPath);
         _terminalShellLabel.Visible = isWindowsTerminal;
@@ -713,18 +758,45 @@ internal sealed class LayoutEditorForm : Form
     }
 
     /// <summary>Same as RefreshUrlList, for entry.Command (see WindowPlacer.BuildTerminalCommandArgs)
-    /// instead of entry.Url.</summary>
+    /// instead of entry.Url - uses SplitCommandLines rather than SplitLines since a blank row here is
+    /// meaningful (a tab separator, see AddTabSeparator) rather than noise to discard.</summary>
     private void RefreshCommandList(LayoutEntry entry)
     {
         _isPopulating = true;
         _commandList.Items.Clear();
-        foreach (var command in SplitLines(entry.Command))
+        foreach (var command in SplitCommandLines(entry.Command))
             _commandList.Items.Add(command);
         _isPopulating = false;
     }
 
     private static string[] SplitLines(string? raw) =>
         string.IsNullOrWhiteSpace(raw) ? Array.Empty<string>() : raw.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    /// <summary>Same as SplitLines, but keeps a single blank row for each run of blank lines instead
+    /// of discarding them - each one is a tab separator AddTabSeparator put there, not incidental
+    /// whitespace. Collapses runs of several into one and drops any at the very start/end (both would
+    /// otherwise round-trip back in as a leading/trailing separator that AddCommand's own "don't add
+    /// a redundant one" check would then have to account for on the next add).</summary>
+    private static string[] SplitCommandLines(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return Array.Empty<string>();
+
+        var result = new List<string>();
+        foreach (var rawLine in raw.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 && (result.Count == 0 || result[^1].Length == 0))
+                continue;
+
+            result.Add(line);
+        }
+
+        if (result.Count > 0 && result[^1].Length == 0)
+            result.RemoveAt(result.Count - 1);
+
+        return result.ToArray();
+    }
 
     /// <summary>"Select Window" - shows a full-screen click-catcher (WindowPickerOverlay) so the user
     /// can point at any window on screen instead of hunting down its .exe by hand via Browse. Captures
@@ -849,6 +921,23 @@ internal sealed class LayoutEditorForm : Form
             return;
 
         _commandList.Items.RemoveAt(index);
+        SaveCommandList();
+    }
+
+    /// <summary>Adds a blank row to _commandList - WindowPlacer.SplitIntoTabs reads a blank row as
+    /// "start a new WindowsTerminal.exe tab here" (see BuildTerminalCommandArgs). Refuses on an empty
+    /// list (nothing yet to split into a first tab) or right after another separator (two in a row
+    /// would mean an empty tab in between, which SplitIntoTabs would just skip anyway - no point
+    /// letting the row list show a break that does nothing).</summary>
+    private void AddTabSeparator()
+    {
+        if (_selectedEntry is null || _commandList.Items.Count == 0)
+            return;
+
+        if (_commandList.Items[^1] is string last && last.Length == 0)
+            return;
+
+        _commandList.Items.Add(string.Empty);
         SaveCommandList();
     }
 

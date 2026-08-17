@@ -94,13 +94,15 @@ internal static class WindowPlacer
         !string.IsNullOrWhiteSpace(programPath)
         && string.Equals(ResolveExeName(programPath), WindowsTerminalExeName, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Turns LayoutEntry.Command's raw (possibly multi-line - one command per line) text
-    /// into an argument string that runs every line in order and leaves the window open afterward -
-    /// the terminal equivalent of BuildNewWindowArgs's "several tabs, one placed window": here it's
-    /// "several commands, one placed window" via chaining instead of tabs, since a shell has no tab
-    /// concept. Each shell has its own stay-open flag and command-separator syntax, so this is
-    /// per-exe rather than one-size-fits-all; an unrecognized shell exe (shouldn't happen - RunAsync
-    /// only calls this when IsTerminalExecutable already matched) falls back to running nothing.
+    /// <summary>Turns LayoutEntry.Command's raw (possibly multi-line - one command per line, with
+    /// blank lines splitting separate tabs, see LayoutEditorForm.AddTabSeparator) text into an
+    /// argument string that runs each tab's commands in order and leaves the window open afterward.
+    /// Only WindowsTerminal.exe can actually open more than one tab; a directly-captured
+    /// cmd.exe/powershell.exe/pwsh.exe console has no tab concept of its own, so every line there
+    /// (blank separators included) just folds into one sequential run instead. Each shell has its
+    /// own stay-open flag and command-separator syntax, so building one tab's args is per-exe rather
+    /// than one-size-fits-all; an unrecognized shell exe (shouldn't happen - RunAsync only calls this
+    /// when IsTerminalExecutable already matched) falls back to running nothing.
     ///
     /// exeName being WindowsTerminal.exe is a special case: it isn't itself a shell, so the command
     /// line it needs is the target shell's own exe name followed by that shell's normal arguments
@@ -110,39 +112,70 @@ internal static class WindowPlacer
     /// never chosen.</summary>
     private static string BuildTerminalCommandArgs(string exeName, LayoutEntry entry)
     {
-        var commands = (entry.Command ?? string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (commands.Length == 0)
+        var tabs = SplitIntoTabs(entry.Command);
+        if (tabs.Count == 0)
             return string.Empty;
 
         var isWindowsTerminal = string.Equals(exeName, WindowsTerminalExeName, StringComparison.OrdinalIgnoreCase);
         var shellExe = isWindowsTerminal ? entry.TerminalShellExe ?? "powershell.exe" : exeName;
 
-        var shellArgs = shellExe.ToLowerInvariant() switch
-        {
-            "cmd.exe" => $"/K \"{string.Join(" && ", commands)}\"",
-            "powershell.exe" or "pwsh.exe" => $"-NoExit -Command \"{string.Join("; ", commands)}\"",
-            _ => string.Empty,
-        };
-
-        if (shellArgs.Length == 0)
-            return string.Empty;
-
         if (!isWindowsTerminal)
-            return shellArgs;
+            return BuildShellArgs(shellExe, tabs.SelectMany(tab => tab));
 
-        // WindowsTerminal.exe treats ';' in its own command line as a separator between multiple
-        // wt actions (e.g. "new-tab ; split-pane"), splitting on it before the quoted -Command
-        // string ever reaches the shell - so a semicolon-joined multi-line command (see the
-        // "; " join above) gets torn apart, with the tail fragment then launched as if it were its
-        // own program (surfacing as a "file not found" error for that fragment). ";;" is WT's own
-        // escape for a literal semicolon, so double every one to keep the whole thing one command.
-        //
-        // The leading "--" is WT's own end-of-options marker: without it, wt.exe parses the shell's
-        // own flags (-NoExit, -Command) as if they were its own new-tab options, stumbling on the
-        // ones it doesn't recognize and launching whatever fragment is left over as if it were a
-        // program name (surfacing as a "file not found" error for that fragment). "--" tells wt to
-        // stop parsing and hand everything after it to CreateProcess untouched.
-        return $"-- {shellExe} {shellArgs}".Replace(";", ";;");
+        // WindowsTerminal.exe treats ';' in its own command line as a separator between multiple wt
+        // actions (e.g. "new-tab ; split-pane"), splitting on it before the quoted -Command string
+        // ever reaches the shell - so a semicolon-joined multi-command tab (see BuildShellArgs's
+        // "; " join) gets torn apart, with the tail fragment then launched as if it were its own
+        // program (surfacing as a "file not found" error for that fragment). "\;" is wt's documented
+        // escape for a literal semicolon (see Microsoft's command-line-arguments docs), so each
+        // tab's own args get backslash-escaped before being joined with wt's real, unescaped ";" -
+        // the only semicolons that reach wt unescaped are the ones actually meant to open a new tab.
+        // No "--" marker is needed - it isn't a real wt option; per Microsoft's own examples a shell
+        // name followed directly by its own flags (e.g. "new-tab PowerShell -c Start-Service") is
+        // handled fine.
+        var tabArgs = tabs
+            .Select(tab => BuildShellArgs(shellExe, tab))
+            .Where(args => args.Length > 0)
+            .Select(args => $"new-tab {shellExe} {args}".Replace(";", "\\;"));
+
+        return string.Join(" ; ", tabArgs);
+    }
+
+    private static string BuildShellArgs(string shellExe, IEnumerable<string> commands) => shellExe.ToLowerInvariant() switch
+    {
+        "cmd.exe" => $"/K \"{string.Join(" && ", commands)}\"",
+        "powershell.exe" or "pwsh.exe" => $"-NoExit -Command \"{string.Join("; ", commands)}\"",
+        _ => string.Empty,
+    };
+
+    /// <summary>Splits Command's raw text into one command list per tab, on blank lines - the only
+    /// place a blank line can come from is LayoutEditorForm.AddTabSeparator, never free typing (the
+    /// Commands editor is a row list, not a free-text box). A separator with nothing between it and
+    /// the next one (or the start/end of the text) starts no new tab at all, rather than an empty
+    /// one - current only turns into an entry in tabs once a real command line lands in it.</summary>
+    private static List<List<string>> SplitIntoTabs(string? raw)
+    {
+        var tabs = new List<List<string>>();
+        List<string>? current = null;
+        foreach (var rawLine in (raw ?? string.Empty).Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+            {
+                current = null;
+                continue;
+            }
+
+            if (current is null)
+            {
+                current = new List<string>();
+                tabs.Add(current);
+            }
+
+            current.Add(line);
+        }
+
+        return tabs;
     }
 
     /// <summary>Launches every entry up front (not one at a time, then waits) so a layout with
