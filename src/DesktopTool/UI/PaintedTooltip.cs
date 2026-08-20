@@ -15,7 +15,8 @@ namespace DesktopTool.UI;
 internal sealed class PaintedTooltip
 {
     private const int PaddingX = 8;
-    private const int Height = 22;
+    private const int PaddingY = 4;
+    private const int MinHeight = 22;
     private const int Gap = 4;
 
     private string? _text;
@@ -55,15 +56,34 @@ internal sealed class PaintedTooltip
         if (_text is not { } text)
             return null;
 
-        var textWidth = TextRenderer.MeasureText(text, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
-        var width = textWidth + PaddingX * 2;
+        var maxTextWidth = Math.Max(1, bounds.Width - PaddingX * 2);
+        var singleLineWidth = TextRenderer.MeasureText(text, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+
+        int width, height;
+        if (singleLineWidth <= maxTextWidth)
+        {
+            width = singleLineWidth + PaddingX * 2;
+            height = MinHeight;
+        }
+        else
+        {
+            // Too wide for one line at this bounds - wrap within the available width and grow the
+            // pill's height to fit instead of overflowing past bounds (see this class's own comment:
+            // it can never extend past the bounds it's given). Only reached by callers feeding this
+            // longer text than the short row-action strings it was originally sized for (e.g. a
+            // feature's Description) - a short tooltip that already fits on one line takes the branch
+            // above unchanged.
+            var wrapped = TextRenderer.MeasureText(text, font, new Size(maxTextWidth, int.MaxValue), TextFormatFlags.WordBreak);
+            width = wrapped.Width + PaddingX * 2;
+            height = Math.Max(MinHeight, wrapped.Height + PaddingY * 2);
+        }
 
         var x = Math.Clamp(_targetRect.X, bounds.X, Math.Max(bounds.X, bounds.Right - width));
         var below = _targetRect.Bottom + Gap;
-        var y = below + Height <= bounds.Bottom ? below : _targetRect.Top - Gap - Height;
-        y = Math.Clamp(y, bounds.Y, Math.Max(bounds.Y, bounds.Bottom - Height));
+        var y = below + height <= bounds.Bottom ? below : _targetRect.Top - Gap - height;
+        y = Math.Clamp(y, bounds.Y, Math.Max(bounds.Y, bounds.Bottom - height));
 
-        return new Rectangle(x, y, width, Height);
+        return new Rectangle(x, y, width, height);
     }
 
     /// <summary>Paints the pill, anchored just below targetRect by default and flipped to just above

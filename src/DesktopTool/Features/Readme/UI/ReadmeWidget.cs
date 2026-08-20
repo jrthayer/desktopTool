@@ -36,18 +36,22 @@ internal sealed class ReadmeModel : WidgetStyleModel
     public string Title { get; set; } = "Readme";
 }
 
-/// <summary>"Readme" widget - opened via Widget Manager's own "?" button (see
-/// WidgetManagerWidget.HelpRequested/TrayApplicationContext.OpenReadme). A master/detail reference,
-/// not a live control surface: the list on the left is exactly Widget Manager's own row order
-/// (Fences/Layout Launcher/Snap Lines/Widget Snapping/Fence Trash Can - see Entries below); selecting
-/// one paints its own description in the pane to the right, instead of one long scroll of text.
-/// Built on LayeredWidgetForm like every other on-screen widget, so it drags/resizes/themes/closes
-/// the exact same way rather than being a plain modal dialog (the old ReadmeForm this replaces) - but
-/// genuinely ephemeral, unlike Fences/Layout Launcher/Widget Manager: created fresh by OpenReadme
-/// each time, fully disposed on close (its own header close button - see ReadmeModel's own
-/// HeaderCloseButton default - is a real Close(), not this base's usual "cancel and hide" pattern -
-/// hence no OnFormClosing override here at all), and backed by ReadmeModel above rather than a
-/// saved-to-disk Store, since there's nothing here worth remembering between opens.</summary>
+/// <summary>Generic master/detail reference widget, not a live control surface: a fixed-width list of
+/// titles on the left, the selected one's own body text word-wrapped in the pane to the right, instead
+/// of one long scroll of text. Originally just "Readme" (opened via Widget Manager's own "?" button -
+/// see WidgetManagerWidget.HelpRequested/TrayApplicationContext.OpenReadme - with its own hardcoded
+/// Fences/Layout Launcher/Snap Lines/Widget Snapping/Fence Trash Can entries, still the parameterless
+/// constructor's default via DefaultEntries below), now reusable for any other (title, entries) pair
+/// with the identical list/detail mechanics - see ClaudePipelineWidget's own feature-info window for
+/// the second use. Built on LayeredWidgetForm like every other on-screen widget, so it drags/resizes/
+/// themes/closes the exact same way rather than being a plain modal dialog - but genuinely ephemeral,
+/// unlike Fences/Layout Launcher/Widget Manager: created fresh each time, fully disposed on close (its
+/// own header close button - see ReadmeModel's own HeaderCloseButton default - is a real Close(), not
+/// this base's usual "cancel and hide" pattern - hence no OnFormClosing override here at all), and
+/// backed by ReadmeModel above rather than a saved-to-disk Store, since there's nothing here worth
+/// remembering between opens. Entries can change after construction (RefreshEntries) for a caller
+/// whose own source data can change while this window happens to be open - the original Readme content
+/// never needs that, but nothing stops it from calling RefreshEntries too.</summary>
 internal sealed class ReadmeWidget : LayeredWidgetForm
 {
     private const int OuterMarginPx = 13;
@@ -70,10 +74,9 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
     private const int DefaultContentWidth = 480;
     private const int DefaultContentHeight = 280;
 
-    private readonly record struct Entry(string Title, string Body);
-
-    // Same order as WidgetManagerWidget.Rows - this list exists to be read alongside that one.
-    private static readonly Entry[] Entries =
+    // Same order as WidgetManagerWidget.Rows - this list exists to be read alongside that one. Only
+    // ever used by the parameterless constructor's default - see DefaultEntries below.
+    private static readonly (string Title, string Body)[] DefaultEntries =
     {
         new("Fences",
             "Draggable, resizable containers for your desktop icons - drag files onto one to fence " +
@@ -105,6 +108,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
     // edge, so it reads proportionally less blurry on a full paragraph of body text at a slightly
     // bigger size, without touching the list rows' own single-line Font.
     private readonly Font _detailBodyFont;
+    private IReadOnlyList<(string Title, string Body)> _entries;
 
     private bool _settingsButtonArmed;
     private int? _armedRowIndex;
@@ -117,14 +121,24 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
 
     protected override IWidgetStyle Style => _model;
 
+    /// <summary>The original Readme, unchanged - DefaultEntries/"Readme" via the parameterized
+    /// constructor below.</summary>
+    public ReadmeWidget(FenceManager fenceManager) : this(fenceManager, "Readme", DefaultEntries, 0) { }
+
     // 1f (full opacity), matching ReadmeModel's own Opacity default - not read from _model itself,
     // which can't be read yet this early (see CreateParams' own "Control's base constructor probes
     // CreateParams before our own constructor body has run" comment, the same timing issue here for
     // the base constructor's own opacity argument), but a fresh ReadmeModel always starts at exactly
     // this value anyway, so there's nothing lost by writing the literal directly instead.
-    public ReadmeWidget(FenceManager fenceManager) : base(1f, fenceManager)
+    /// <summary>title/entries/selectedIndex are what make this reusable for something other than the
+    /// original Readme content (see this class's own comment) - selectedIndex is clamped against
+    /// entries so an out-of-range value (or an empty list) can never crash construction.</summary>
+    public ReadmeWidget(FenceManager fenceManager, string title, IReadOnlyList<(string Title, string Body)> entries, int selectedIndex)
+        : base(1f, fenceManager)
     {
-        _model = new ReadmeModel();
+        _model = new ReadmeModel { Title = title };
+        _entries = entries;
+        _selectedIndex = entries.Count == 0 ? 0 : Math.Clamp(selectedIndex, 0, entries.Count - 1);
         _detailTitleFont = new Font(AppTheme.Font, FontStyle.Bold);
         _detailBodyFont = new Font(AppTheme.Font.FontFamily, AppTheme.Font.Size + 1f);
 
@@ -134,6 +148,31 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         Font = AppTheme.Font;
 
         // Forces handle creation now that every field CreateParams needs is set.
+        RenderAndPresent();
+    }
+
+    /// <summary>Lets a caller whose own source data can change while this window is open (a
+    /// ClaudePipelineManager.FeaturesChanged, say) push the new list in - a no-op for the original
+    /// Readme content, which never changes. Re-clamps the current selection instead of resetting it
+    /// to 0, so editing/toggling some other entry doesn't bounce the view away from the one still
+    /// being read.</summary>
+    public void RefreshEntries(IReadOnlyList<(string Title, string Body)> entries)
+    {
+        _entries = entries;
+        if (_selectedIndex >= _entries.Count)
+            _selectedIndex = Math.Max(0, _entries.Count - 1);
+        RenderAndPresent();
+    }
+
+    /// <summary>Jumps an already-open window to a specific entry - same "activate an existing instance
+    /// instead of opening a second copy" idea as LayoutEditorForm.SelectProfileById/ClaudePipelineEditorForm.
+    /// SelectFeatureById, just by index (this class has no notion of a stable Id of its own) rather than
+    /// a Guid.</summary>
+    public void SelectEntry(int index)
+    {
+        if (index < 0 || index >= _entries.Count || index == _selectedIndex)
+            return;
+        _selectedIndex = index;
         RenderAndPresent();
     }
 
@@ -347,7 +386,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         return new Rectangle(ListHorizontalPadding, top, ListColumnWidth, height);
     }
 
-    protected override int ListRowCount => Entries.Length;
+    protected override int ListRowCount => _entries.Count;
     protected override int ListRowHeight => ListRowHeightConst;
 
     /// <summary>Which row (if any) contentPoint lands on - simpler than WidgetManagerWidget's own
@@ -384,7 +423,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
         using (var textBrush = new SolidBrush(Color.WhiteSmoke))
         using (var textFormat = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString(Entries[index].Title, Font, textBrush, new Rectangle(rowRect.X + 8, rowRect.Y, rowRect.Width - 12, rowRect.Height), textFormat);
+            g.DrawString(_entries[index].Title, Font, textBrush, new Rectangle(rowRect.X + 8, rowRect.Y, rowRect.Width - 12, rowRect.Height), textFormat);
         g.TextRenderingHint = previousTextHint;
     }
 
@@ -407,14 +446,16 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
     {
         var listArea = GetListArea(contentWidth, contentHeight);
         var detailArea = GetDetailArea(contentWidth, contentHeight);
-        if (detailArea.Width <= 0)
+        // Empty entries (a caller's own source list can legitimately have nothing in it right now,
+        // unlike the original static Readme content) - nothing to select, nothing to paint here.
+        if (detailArea.Width <= 0 || _entries.Count == 0)
             return;
 
         var dividerX = listArea.Right + DetailGap / 2;
         using (var dividerPen = new Pen(ThemedBorder))
             g.DrawLine(dividerPen, ToWindow(new Point(dividerX, listArea.Top)), ToWindow(new Point(dividerX, listArea.Bottom)));
 
-        var entry = Entries[_selectedIndex];
+        var entry = _entries[_selectedIndex];
         var windowRect = ToWindow(detailArea);
 
         var previousTextHint = g.TextRenderingHint;

@@ -1,3 +1,5 @@
+using DesktopTool.Features.ClaudePipeline;
+using DesktopTool.Features.ClaudePipeline.UI;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.FolderFences;
 using DesktopTool.Features.Layouts;
@@ -22,10 +24,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly LayoutLauncherStore _layoutLauncherStore = new();
     private readonly WidgetManagerStore _widgetManagerStore = new();
 
+    private readonly ClaudePipelineFeatureStore _claudePipelineFeatureStore = new();
+    private readonly ClaudePipelineWidgetStore _claudePipelineWidgetStore = new();
+    private readonly ClaudePipelineManager _claudePipelineManager;
+
     // At most one editor open at a time - OnManageLayouts activates this instead of opening a
     // second copy, the same "don't duplicate, just surface the existing one" idea FenceManager's
     // own SnapLines edit mode already follows for its overlay/panel pair.
     private LayoutEditorForm? _layoutEditor;
+
+    // Same "create once, reuse/activate the existing one" idea as _layoutEditor above.
+    private ClaudePipelineEditorForm? _pipelineEditor;
 
     // Same "create once, reuse/activate the existing one" idea as _layoutEditor above - opened via
     // Widget Manager's own "?" button (see WidgetManagerWidget.HelpRequested/OpenReadme). Unlike
@@ -39,6 +48,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
     // any more - only Widget Manager's own Layout Launcher row does (LayoutLauncherWidget.
     // ToggleVisible), same "created once, never disposed" object either way.
     private readonly LayoutLauncherWidget _layoutLauncher;
+
+    // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
+    // Widget Manager's own Claude Pipeline row rather than a top-level tray item of its own.
+    private readonly ClaudePipelineWidget _claudePipeline;
 
     // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
     // the tray's own top-level "Widget Manager" item rather than opened fresh each time.
@@ -63,11 +76,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _layoutLauncher = new LayoutLauncherWidget(_layoutManager, _fenceManager, layoutLauncherModel, _layoutLauncherStore);
         _layoutLauncher.ManageLayoutsRequested += (_, profileId) => OpenLayoutEditor(profileId);
 
-        // Needs _layoutLauncher to already exist - its own Fences row reads/toggles that widget's
-        // Visible directly rather than through a separate manager class.
+        _claudePipelineManager = new ClaudePipelineManager(_claudePipelineFeatureStore);
+        _claudePipelineManager.Load();
+        var claudePipelineModel = _claudePipelineWidgetStore.Load();
+        _claudePipeline = new ClaudePipelineWidget(_claudePipelineManager, _fenceManager, claudePipelineModel, _claudePipelineWidgetStore);
+        _claudePipeline.ManageFeaturesRequested += (_, featureId) => OpenPipelineEditor(featureId);
+
+        // Needs _layoutLauncher/_claudePipeline to already exist - their own rows read/toggle those
+        // widgets' Visible directly rather than through a separate manager class.
         var widgetManagerModel = _widgetManagerStore.Load();
-        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
+        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _claudePipeline, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
         _widgetManager.EditLayoutsRequested += (_, _) => OpenLayoutEditor(null);
+        _widgetManager.EditFeaturesRequested += (_, _) => OpenPipelineEditor(null);
         _widgetManager.HelpRequested += (_, _) => OpenReadme();
 
         var menu = new ContextMenuStrip
@@ -131,6 +151,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // already exactly what was just loaded.
         if (layoutLauncherModel.Visible)
             _layoutLauncher.Show();
+        if (claudePipelineModel.Visible)
+            _claudePipeline.Show();
         if (widgetManagerModel.Visible)
             _widgetManager.Show();
 
@@ -176,6 +198,21 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _layoutEditor.Show();
     }
 
+    private void OpenPipelineEditor(Guid? initialFeatureId)
+    {
+        if (_pipelineEditor is { IsDisposed: false })
+        {
+            if (initialFeatureId is { } id)
+                _pipelineEditor.SelectFeatureById(id);
+            _pipelineEditor.Activate();
+            return;
+        }
+
+        _pipelineEditor = new ClaudePipelineEditorForm(_claudePipelineManager, initialFeatureId);
+        _pipelineEditor.FormClosed += (_, _) => _pipelineEditor = null;
+        _pipelineEditor.Show();
+    }
+
     private void OpenReadme()
     {
         if (_readmeForm is { IsDisposed: false })
@@ -201,8 +238,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _layoutEditor?.Dispose();
+        _pipelineEditor?.Dispose();
         _readmeForm?.Dispose();
         _layoutLauncher.Shutdown();
+        _claudePipeline.Shutdown();
         _widgetManager.Shutdown();
         _fenceManager.Dispose();
         _folderFenceManager.Dispose();

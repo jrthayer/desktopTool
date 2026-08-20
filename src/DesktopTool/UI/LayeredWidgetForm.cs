@@ -2447,6 +2447,21 @@ internal abstract class LayeredWidgetForm : Form
             if (newButtonRowAtBottom != ButtonRowAtBottom)
             {
                 ButtonRowAtBottom = newButtonRowAtBottom;
+
+                // RenderAndPresent (next) reads the window's own *actual* current size via
+                // GetWindowRect - but at this point in a WM_MOVING handler, Windows hasn't actually
+                // resized/repositioned the window yet (that only happens once WriteBackWindowRect's
+                // own RECT is applied, after this handler returns). Left alone, RenderAndPresent
+                // would render against TopBand/BottomBand's new (just-flipped) values but the
+                // window's own *old* bounds - a one-frame mismatch that clipped the widget's own top
+                // edge right at the flip. Applying the identical rect WriteBackWindowRect computes
+                // via a synchronous SetWindowPos first (same formula, same already-flipped
+                // OuterMargin/TopBand/BottomBand) makes GetWindowRect - and so RenderAndPresent - see
+                // the correct, already-resized bounds; WriteBackWindowRect below just reapplies the
+                // same rect for WM_MOVING's own protocol, a no-op by the time it runs.
+                NativeMethods.SetWindowPos(Handle, IntPtr.Zero, body.Left - OuterMargin, body.Top - TopBand,
+                    body.Width + OuterMargin * 2, body.Height + TopBand + BottomBand,
+                    NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
                 RenderAndPresent();
             }
             WriteBackWindowRect(m.LParam, body);
@@ -2506,10 +2521,15 @@ internal abstract class LayeredWidgetForm : Form
         {
             // A real caption's right-click would show the system menu via the default proc - there's
             // no such menu for this custom-drawn title row, so this always swallows the message
-            // itself rather than falling through to base.WndProc/DefWindowProc.
-            Activation.Activate();
+            // itself rather than falling through to base.WndProc/DefWindowProc. Only activates when
+            // landing outside the title text itself - a right-click that's about to show the Rename
+            // menu already gets its own feedback from that menu appearing, so it shouldn't also engage
+            // the widget (show its chrome buttons) underneath at the same time; right-clicking
+            // anywhere else in the margin/title row (no menu to show) still activates as before.
             if (IsOverTitleRow(m.LParam))
                 ShowTitleContextMenu();
+            else
+                Activation.Activate();
             return;
         }
 

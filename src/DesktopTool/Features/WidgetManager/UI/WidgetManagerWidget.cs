@@ -1,5 +1,6 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using DesktopTool.Features.ClaudePipeline.UI;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.FolderFences;
 using DesktopTool.Features.Layouts.UI;
@@ -12,7 +13,7 @@ namespace DesktopTool.Features.WidgetManager.UI;
 /// "Widget Manager" widget - a third, independent proof that LayeredWidgetForm's own chrome
 /// (move/resize/snap/rename/settings/theme/list) works for something that isn't a Fence or the
 /// Layout Launcher. Lists the app's toggleable widgets/switches - Fences, Layout Launcher, Snap
-/// Lines, Widget Snapping, Fence Trash Can - each as a fixed row (never added to/removed from,
+/// Lines, Widget Snapping, Fence Trash Can, Claude Toolbox - each as a fixed row (never added to/removed from,
 /// unlike Layout Launcher's own saved-profile list) with an on/off switch and, for the three that
 /// have somewhere to go, a row-specific action button, so all of them can be reached without
 /// opening the tray menu. Everything not genuinely specific to this widget (theme derivation, the
@@ -29,7 +30,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private const int ButtonBandOverhang = 19;
     private const int TopMarginWithButtons = OuterMarginPx + ButtonBandOverhang;
 
-    private const int RowCountFixed = 5;
+    private const int RowCountFixed = 6;
     private const int ListVerticalPadding = 8;
     private const int ListHorizontalPadding = 10;
 
@@ -42,12 +43,20 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private const int ListRowHeightConst = 30;
 
     private readonly LayoutLauncherWidget _layoutLauncher;
+    private readonly ClaudePipelineWidget _claudePipeline;
     private readonly FolderFenceManager _folderFences;
     private readonly WidgetManagerModel _model;
     private readonly WidgetManagerStore _store;
 
     private bool _allowClose;
     private bool _settingsButtonArmed;
+
+    // Header help button ("i", opens the Readme - see HelpRequested) - chained left of the header
+    // close button (see GetHeaderHelpButtonRect), same arm-then-fire pattern as every other button on
+    // this base, just implemented locally here rather than as a LayeredWidgetForm mechanism (unlike
+    // the close button, this one's specific to Widget Manager, not something every widget wants).
+    private bool _headerHelpButtonArmed;
+    private bool _headerHelpButtonHovered;
 
     // Cog for an "open an editor" action (Snap Lines/Layout Launcher), Plus for an "add one more"
     // action (Fences), Folder for "add a folder fence" (Fences' own second button), None for a row
@@ -62,7 +71,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         string Label, string ButtonTooltip, RowButtonIcon ButtonIcon,
         RowButtonIcon SecondButtonIcon = RowButtonIcon.None, string SecondButtonTooltip = "");
 
-    // Fence Trash Can last - IsRowOn/ToggleRow/FireRowButtonAction's own index switches below must
+    // Claude Pipeline last - IsRowOn/ToggleRow/FireRowButtonAction's own index switches below must
     // stay in this same order.
     private static readonly WidgetRow[] Rows =
     {
@@ -71,6 +80,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         new("Snap Lines", "Edit Snap Lines", RowButtonIcon.Cog),
         new("Widget Snapping", string.Empty, RowButtonIcon.None),
         new("Fence Trash Can", string.Empty, RowButtonIcon.None),
+        new("Claude Toolbox", "Manage Features", RowButtonIcon.Cog),
     };
 
     // Row click handling - clicking a row's own switch flips that widget's on/off state; its
@@ -100,6 +110,11 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// this widget needing a LayoutManager/LayoutEditorForm reference of its own.</summary>
     public event EventHandler? EditLayoutsRequested;
 
+    /// <summary>Fired when the Claude Pipeline row's "Manage Features" button is clicked - lets
+    /// TrayApplicationContext open the same Manage Features editor its own tray item does, without
+    /// this widget needing a ClaudePipelineManager/ClaudePipelineEditorForm reference of its own.</summary>
+    public event EventHandler? EditFeaturesRequested;
+
     /// <summary>Fired when the "?" button is clicked - lets TrayApplicationContext open (or
     /// re-activate) the Readme window the same "create once, reuse" way as OpenLayoutEditor, without
     /// this widget needing a ReadmeForm reference of its own.</summary>
@@ -114,18 +129,20 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// rows read from - WidgetManagerModel already implements IWidgetStyle.</summary>
     protected override IWidgetStyle Style => _model;
 
-    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
+    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, ClaudePipelineWidget claudePipeline, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
         : base(model.Opacity / 100f, fenceManager)
     {
         _layoutLauncher = layoutLauncher;
+        _claudePipeline = claudePipeline;
         _folderFences = folderFences;
         _model = model;
         _store = store;
 
-        // Keeps the Layout Launcher row's own switch from going stale whenever Visible changes via
-        // some path other than this widget's own row click (ToggleRow already repaints itself right
-        // there) - see LayoutLauncherWidget.VisibilityChanged's own doc comment.
+        // Keeps the Layout Launcher/Claude Pipeline rows' own switches from going stale whenever
+        // Visible changes via some path other than this widget's own row click (ToggleRow already
+        // repaints itself right there) - see LayoutLauncherWidget.VisibilityChanged's own doc comment.
         _layoutLauncher.VisibilityChanged += (_, _) => RefreshRowStates();
+        _claudePipeline.VisibilityChanged += (_, _) => RefreshRowStates();
 
         ExtraButtons = new List<ChromeButton>
         {
@@ -292,8 +309,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             return HTCLIENT;
 
         // Not gated by ShowsButtons, unlike every check above - see IsOverHeaderCloseButton's own
-        // comment.
-        if (IsOverHeaderCloseButton(contentPoint))
+        // comment. Same for the header help button right next to it - see IsOverHeaderHelpButton.
+        if (IsOverHeaderCloseButton(contentPoint) || IsOverHeaderHelpButton(contentPoint))
             return HTCLIENT;
 
         // Every row's switch/button lives inside the list area, already ordinary HTCLIENT
@@ -336,6 +353,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
         if (TryArmHeaderCloseButton(contentPoint))
             return;
+        if (TryArmHeaderHelpButton(contentPoint))
+            return;
         if (ShowsButtons && GetSettingsButtonRect(contentWidth, onLeft).Contains(contentPoint))
         {
             _settingsButtonArmed = true;
@@ -359,6 +378,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         base.OnMouseMove(e);
         UpdateListScrollDrag(ToContent(e.Location));
         UpdateRowTooltip(e.Location);
+        UpdateHeaderHelpButtonHover(ToContent(e.Location));
     }
 
     // OnMouseEnter needs no override of its own - LayeredWidgetForm's own already covers hover
@@ -369,6 +389,11 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         base.OnMouseLeave(e);
         if (_rowTooltip.Hide())
             RenderAndPresent();
+        if (_headerHelpButtonHovered)
+        {
+            _headerHelpButtonHovered = false;
+            RenderAndPresent();
+        }
     }
 
     protected override void OnMouseWheel(MouseEventArgs e)
@@ -388,6 +413,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         var onLeft = ShouldSettingsButtonOpenLeft(contentWidth);
 
         FireArmedHeaderCloseButton(contentPoint);
+        FireArmedHeaderHelpButton(contentPoint);
 
         if (_settingsButtonArmed)
         {
@@ -669,8 +695,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// folder fence visible (see FenceManager.AnyVisible/FolderFenceManager.AnyVisible - a folder
     /// fence is conceptually a kind of fence, so the two show/hide together under this one switch);
     /// Layout Launcher: the widget's own Visible; Snap Lines: SnapLineManager.Enabled; Widget
-    /// Snapping: SnapLineManager.WidgetEdgesEnabled; Fence Trash Can: FenceManager.HasRecycleBin.
-    /// Same row order as Rows above.</summary>
+    /// Snapping: SnapLineManager.WidgetEdgesEnabled; Fence Trash Can: FenceManager.HasRecycleBin;
+    /// Claude Pipeline: the widget's own Visible. Same row order as Rows above.</summary>
     private bool IsRowOn(int index) => index switch
     {
         0 => Fences.AnyVisible || _folderFences.AnyVisible,
@@ -678,6 +704,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         2 => Fences.SnapLines.Enabled,
         3 => Fences.SnapLines.WidgetEdgesEnabled,
         4 => Fences.HasRecycleBin,
+        5 => _claudePipeline.Visible,
         _ => false,
     };
 
@@ -696,6 +723,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case 4:
                 if (Fences.HasRecycleBin) Fences.RemoveRecycleBin(); else Fences.AddRecycleBin();
                 break;
+            case 5: _claudePipeline.ToggleVisible(); break;
         }
     }
 
@@ -708,6 +736,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case 2: Fences.SnapLines.EnterEditMode(); break;
             // 3 (Widget Snapping) and 4 (Fence Trash Can) have no action button - RowButtonIcon.
             // None, never hit-testable.
+            case 5: EditFeaturesRequested?.Invoke(this, EventArgs.Empty); break;
         }
     }
 
@@ -951,13 +980,85 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private readonly Font _switchFont = new(AppTheme.Font.FontFamily, 7f);
     private Font SwitchFont => _switchFont;
 
+    /// <summary>Chained immediately left of the header close glyph (see GetHeaderCloseButtonRect) -
+    /// same size, same vertical centering, just one more optional header-row control living right next
+    /// to it. Content-relative, like every other rect helper on this base.</summary>
+    private Rectangle GetHeaderHelpButtonRect(int contentWidth)
+    {
+        var closeRect = GetHeaderCloseButtonRect(contentWidth);
+        return new Rectangle(closeRect.X - 4 - closeRect.Width, closeRect.Y, closeRect.Width, closeRect.Height);
+    }
+
+    /// <summary>Only shown/clickable alongside the header close glyph itself (same
+    /// TitleVisible/ShowHeaderCloseButton gate as IsOverHeaderCloseButton) - a user who's turned the
+    /// header-close convenience off presumably wants a bare, controls-free header from this one too,
+    /// not just an extra button with nothing next to it.</summary>
+    private bool IsOverHeaderHelpButton(Point contentPoint) =>
+        TitleVisible && ShowHeaderCloseButton && GetHeaderHelpButtonRect(GetContentSize().Width).Contains(contentPoint);
+
+    /// <summary>Arms the header help button if contentPoint lands on it - same arm-then-fire pattern
+    /// as LayeredWidgetForm's own TryArmHeaderCloseButton, just implemented locally since this button
+    /// is specific to this widget.</summary>
+    private bool TryArmHeaderHelpButton(Point contentPoint)
+    {
+        if (!IsOverHeaderHelpButton(contentPoint))
+            return false;
+        _headerHelpButtonArmed = true;
+        return true;
+    }
+
+    /// <summary>Fires HelpRequested if the header help button was armed and the mouse is still over it
+    /// on release - mirrors LayeredWidgetForm.FireArmedHeaderCloseButton.</summary>
+    private void FireArmedHeaderHelpButton(Point contentPoint)
+    {
+        if (!_headerHelpButtonArmed)
+            return;
+        _headerHelpButtonArmed = false;
+        if (IsOverHeaderHelpButton(contentPoint))
+            HelpRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Repaints only on an actual hover-state change - same restraint as UpdateRowTooltip's
+    /// own change-gated repaint. No tooltip text of its own (the header close glyph right next to it
+    /// doesn't get one either - a hover tint is the only feedback either offers).</summary>
+    private void UpdateHeaderHelpButtonHover(Point contentPoint)
+    {
+        var hovered = IsOverHeaderHelpButton(contentPoint);
+        if (hovered == _headerHelpButtonHovered)
+            return;
+        _headerHelpButtonHovered = hovered;
+        RenderAndPresent();
+    }
+
+    // How much smaller the painted glyph is than its own clickable rect (see GetHeaderHelpButtonRect)
+    // - the hover tint/hit target stay full-size (same as the header close button right next to it),
+    // just the icon itself sits a little smaller and centered within it.
+    private const int InfoIconInset = 3;
+
+    /// <summary>Circled "i" (see InfoIcon, shared with Claude Toolbox's own row info icon) rather than
+    /// the header close button's own plain "×" text-glyph treatment - a bare "i" character read as a
+    /// stray letter sitting in the header instead of a button.</summary>
+    private void PaintHeaderHelpButton(Graphics g, int contentWidth)
+    {
+        if (!TitleVisible || !ShowHeaderCloseButton)
+            return;
+
+        var rect = ToWindow(GetHeaderHelpButtonRect(contentWidth));
+        if (_headerHelpButtonHovered)
+            PaintButtonHoverTint(g, rect);
+
+        var iconRect = Rectangle.Inflate(rect, -InfoIconInset, -InfoIconInset);
+        InfoIcon.Paint(g, iconRect, Color.WhiteSmoke);
+    }
+
     /// <summary>Body/title/border/Settings/Close/the list itself are all LayeredWidgetForm's own
-    /// PaintChrome now (see ExtraButtons/GetListArea/PaintListRow) - the row tooltip (see
-    /// _rowTooltip/UpdateRowTooltip) is the only thing genuinely specific to this widget still
-    /// painted here, last, so it sits on top of everything else.</summary>
+    /// PaintChrome now (see ExtraButtons/GetListArea/PaintListRow) - the header help button and the
+    /// row tooltip (see _rowTooltip/UpdateRowTooltip) are the only things genuinely specific to this
+    /// widget still painted here, last, so they sit on top of everything else.</summary>
     protected override void PaintContent(Graphics g, int contentWidth, int contentHeight)
     {
         PaintChrome(g, contentWidth, contentHeight);
+        PaintHeaderHelpButton(g, contentWidth);
         _rowTooltip.Paint(g, Font, SettingsMenuTooltipColor, ToWindow(new Rectangle(0, 0, contentWidth, contentHeight)),
             Style.HeaderBorderMode ? ThemedTitle : null);
     }
