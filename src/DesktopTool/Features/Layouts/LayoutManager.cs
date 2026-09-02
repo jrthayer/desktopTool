@@ -23,6 +23,31 @@ public sealed class LayoutManager
     {
         _profiles.Clear();
         _profiles.AddRange(_store.Load());
+        RepairStalePaths();
+    }
+
+    /// <summary>Fixes launch paths that point into a now-deleted versioned folder because a
+    /// Squirrel.Windows app (Discord most notably - it updates constantly) reinstalled itself
+    /// alongside. Runs once at load: an entry whose ProgramPath can be re-pointed at the newest
+    /// sibling app-* folder is rewritten in place and the change persisted, so a layout that would
+    /// otherwise fail to launch that program just works. Anything not Squirrel-shaped, or with no
+    /// surviving install, is left exactly as it was - see SquirrelPathRepair.</summary>
+    private void RepairStalePaths()
+    {
+        var changed = false;
+        foreach (var profile in _profiles)
+            foreach (var entry in profile.Entries)
+                if (SquirrelPathRepair.TryRepair(entry.ProgramPath) is { } repaired)
+                {
+                    entry.ProgramPath = repaired;
+                    changed = true;
+                }
+
+        if (changed)
+        {
+            Save();
+            ProfilesChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     public LayoutProfile CreateLayout(string name)
