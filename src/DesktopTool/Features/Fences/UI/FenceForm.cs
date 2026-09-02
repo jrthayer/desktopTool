@@ -325,6 +325,17 @@ internal sealed class FenceForm : LayeredWidgetForm
     /// re-render themselves directly.</summary>
     internal void RefreshAfterExternalChange() => RenderAndPresent();
 
+    /// <summary>Drops the cached Recycle Bin icon so the next paint re-extracts the shell's current
+    /// empty/full-aware one, then repaints. Called by FenceManager whenever the bin's contents
+    /// change (see RecycleBinChangeWatcher) or this app sends something there itself - the icon is
+    /// otherwise cached for the fence's whole lifetime like every other item's (see GetIcon).</summary>
+    internal void RefreshRecycleBinIcon()
+    {
+        if (_iconCache.Remove(FenceManager.RecycleBinPath, out var stale))
+            stale?.Dispose();
+        RenderAndPresent();
+    }
+
     public new void Show() => NativeMethods.ShowWindow(Handle, NativeMethods.SW_SHOWNOACTIVATE);
 
     public void SetVisible(bool visible) =>
@@ -639,6 +650,15 @@ internal sealed class FenceForm : LayeredWidgetForm
         }
 
         RenderAndPresent();
+    }
+
+    /// <summary>Any focus-gaining click on a fence also opportunistically prunes items whose target
+    /// program was uninstalled (or whose file was deleted) while the app was running - see
+    /// FenceManager.PruneDeadItems, which self-throttles so this stays cheap however often it fires.</summary>
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        _manager.PruneDeadItems();
     }
 
     protected override void OnMouseWheel(MouseEventArgs e)

@@ -1,5 +1,6 @@
 using DesktopTool.Features.Fences.Native;
 using DesktopTool.Features.Fences.UI;
+using DesktopTool.Features.Layouts.Native;
 using DesktopTool.Native;
 using DesktopTool.UI;
 
@@ -13,6 +14,15 @@ public sealed class FenceManager : IDisposable
     private readonly IDesktopAnchorStrategy _anchorStrategy;
     private readonly List<FenceModel> _models = new();
     private readonly Dictionary<Guid, FenceForm> _forms = new();
+    private readonly RecycleBinChangeWatcher _recycleBinWatcher = new();
+
+    // PruneDeadItems is wired to run on every fence activation (see FenceForm.OnActivated) as well
+    // as startup and Show All, so it self-throttles to at most once per this interval - a stale
+    // shortcut lingering a few extra seconds after an uninstall is fine; rescanning every click
+    // (and re-prompting for the Recycle Bin confirmation) is not.
+    private static readonly TimeSpan PruneCooldown = TimeSpan.FromSeconds(10);
+    private DateTime _lastPruneUtc = DateTime.MinValue;
+    private bool _pruning;
 
     public SnapLineManager SnapLines { get; } = new();
 
@@ -31,6 +41,7 @@ public sealed class FenceManager : IDisposable
         // and interactive.
         _anchorStrategy = new FloatingDesktopAnchorStrategy();
         _iconHider = new DesktopIconHider(_desktopListView);
+        _recycleBinWatcher.Changed += RefreshRecycleBinIcons;
     }
 
     public void LoadAndShowAll()
@@ -60,6 +71,11 @@ public sealed class FenceManager : IDisposable
                 if (!file.IsRecycleBin)
                     _iconHider.Hide(file);
         Save();
+
+        // Drop anything that points at nothing (a program uninstalled since it was fenced, a file
+        // deleted straight off the desktop) before the fences paint it - forced past the cooldown
+        // since this is the one-shot startup pass.
+        PruneDeadItems(force: true);
 
         foreach (var model in _models)
             ShowFence(model);
@@ -163,6 +179,7 @@ public sealed class FenceManager : IDisposable
             foreach (var file in model.Files)
                 if (!file.IsRecycleBin)
                     _iconHider.Restore(file);
+        _recycleBinWatcher.Dispose();
         _desktopListView.Dispose();
         SnapLines.Dispose();
     }
@@ -286,8 +303,13 @@ public sealed class FenceManager : IDisposable
     /// <summary>Sends files that were dropped directly onto a fence's trash cell straight to the
     /// Recycle Bin - these were never fence items to begin with (dragged fresh from Explorer), so
     /// there's no model to reconcile, unlike DeleteFencedItem below.</summary>
-    public void DeletePaths(IReadOnlyList<string> paths, IntPtr ownerHwnd) =>
+    public void DeletePaths(IReadOnlyList<string> paths, IntPtr ownerHwnd)
+    {
         RecycleBinOperations.SendToRecycleBin(ownerHwnd, paths);
+        // The shell change notification would land this in a moment anyway, but do it now so the
+        // trash icon fills the instant the drop completes rather than a beat later.
+        RefreshRecycleBinIcons();
+    }
 
     /// <summary>Deletes an item that was already sitting in a fence by dragging it onto the trash
     /// cell (same fence or a different one), and only removes it from the fence model if the delete
@@ -316,6 +338,7 @@ public sealed class FenceManager : IDisposable
 
         model.Files.Remove(item);
         Save();
+        RefreshRecycleBinIcons();
         return true;
     }
 
@@ -440,6 +463,146 @@ public sealed class FenceManager : IDisposable
     {
         foreach (var form in _forms.Values)
             form.SetVisible(visible);
+        if (visible)
+            PruneDeadItems();
+    }
+
+    /// <summary>Re-extracts the trash cell's icon on whichever fence holds the Recycle Bin item, so
+    /// it tracks the bin filling and emptying (RecycleBinChangeWatcher fires this for changes made
+    /// anywhere; DeletePaths/DeleteFencedItem also call it directly for an instant flip). At most
+    /// one fence ever holds the item, so this is cheap.</summary>
+    private void RefreshRecycleBinIcons()
+    {
+        foreach (var model in _models)
+            if (model.Files.Any(f => f.IsRecycleBin) && _forms.TryGetValue(model.Id, out var form))
+                form.RefreshRecycleBinIcon();
+    }
+
+    /// <summary>Removes fenced items that now point at nothing. Two cases: a shortcut whose target
+    /// program was uninstalled after it was fenced (the uninstaller can't find the .lnk to clean up
+    /// because DesktopIconHider relocated it into the hidden folder, so it lingers forever pointing
+    /// at a deleted exe); a Steam (.url) or Riot Client (.lnk) game shortcut whose game was
+    /// uninstalled even though the shared launcher stayed (see GameLauncherProbe); or an item whose
+    /// own file the user deleted directly. A still-present shortcut is sent to the Recycle Bin so
+    /// it stays recoverable; an item whose file is already gone is just dropped from the fence.
+    ///
+    /// Deliberately conservative: a plain path is only "gone" when it's a fully-qualified local
+    /// path on a drive that's present and ready (see LooksDefinitelyGone), and the game-launcher
+    /// checks only fire on a definite "not installed" - so a disconnected network share, an
+    /// unplugged USB drive, or an unrecognised shortcut can never trigger a false removal. Wired to
+    /// run on every fence activation (FenceForm.OnActivated) plus startup and Show All, so it
+    /// self-throttles to PruneCooldown; force bypasses that for the one-shot startup pass.</summary>
+    public void PruneDeadItems(bool force = false)
+    {
+        if (_pruning)
+            return;
+        if (!force && DateTime.UtcNow - _lastPruneUtc < PruneCooldown)
+            return;
+
+        _pruning = true;
+        try
+        {
+            var dead = new List<(FenceModel Model, FenceItem Item)>();
+            var orphanedShortcuts = new List<string>();
+
+            foreach (var model in _models)
+            {
+                foreach (var item in model.Files)
+                {
+                    if (item.IsRecycleBin)
+                        continue;
+
+                    // The fenced file itself is gone - nothing to send anywhere, just stop drawing it.
+                    if (LooksDefinitelyGone(item.Path))
+                    {
+                        dead.Add((model, item));
+                        continue;
+                    }
+
+                    if (!File.Exists(item.Path))
+                        continue;
+
+                    // The shortcut is still here, but the program (or game) it launches isn't - a
+                    // Steam/Riot game whose install is gone, or an ordinary .lnk to a deleted exe.
+                    var ext = Path.GetExtension(item.Path);
+                    var isShortcut = ext.Equals(".lnk", StringComparison.OrdinalIgnoreCase)
+                                  || ext.Equals(".url", StringComparison.OrdinalIgnoreCase);
+                    if (!isShortcut)
+                        continue;
+
+                    var launchesNothing = GameLauncherProbe.LaunchesUninstalledGame(item.Path)
+                        || (ext.Equals(".lnk", StringComparison.OrdinalIgnoreCase)
+                            && ShortcutResolver.ResolveTarget(item.Path) is { } target
+                            && LooksDefinitelyGone(target));
+                    if (!launchesNothing)
+                        continue;
+
+                    dead.Add((model, item));
+                    orphanedShortcuts.Add(item.Path);
+                    if (item.RealDesktopPath is not null && File.Exists(item.RealDesktopPath))
+                        orphanedShortcuts.Add(item.RealDesktopPath);
+                }
+            }
+
+            if (dead.Count == 0)
+                return;
+
+            // Recycle the orphaned shortcut files first, as one batched undoable operation - only
+            // forget the items if that actually goes through, so a declined confirmation or a locked
+            // file leaves every fence exactly as it was (matches DeleteFencedItem's all-or-nothing).
+            if (orphanedShortcuts.Count > 0)
+            {
+                var owner = _forms.Values.FirstOrDefault()?.Handle ?? IntPtr.Zero;
+                if (!RecycleBinOperations.SendToRecycleBin(owner, orphanedShortcuts))
+                    return;
+            }
+
+            var touched = new HashSet<Guid>();
+            foreach (var (model, item) in dead)
+                if (model.Files.Remove(item))
+                    touched.Add(model.Id);
+
+            if (touched.Count == 0)
+                return;
+
+            Save();
+            foreach (var id in touched)
+                if (_forms.TryGetValue(id, out var form))
+                    form.RefreshAfterExternalChange();
+        }
+        finally
+        {
+            _lastPruneUtc = DateTime.UtcNow;
+            _pruning = false;
+        }
+    }
+
+    /// <summary>True only when path is a concrete local path we can be confident is genuinely gone:
+    /// fully qualified, not a UNC share, on a drive that's present and ready. Anything unresolvable
+    /// or remote returns false so the caller leaves the item alone rather than risk removing one
+    /// whose target is just temporarily unreachable.</summary>
+    private static bool LooksDefinitelyGone(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+        if (File.Exists(path) || Directory.Exists(path))
+            return false;
+        if (!Path.IsPathFullyQualified(path) || path.StartsWith(@"\\", StringComparison.Ordinal))
+            return false;
+
+        var root = Path.GetPathRoot(path);
+        if (string.IsNullOrEmpty(root))
+            return false;
+
+        try
+        {
+            var drive = new DriveInfo(root);
+            return drive.IsReady && drive.DriveType is DriveType.Fixed or DriveType.Removable;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     private static readonly Size DefaultFenceSize = new(240, 200);
