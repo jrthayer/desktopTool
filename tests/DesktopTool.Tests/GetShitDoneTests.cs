@@ -133,6 +133,37 @@ public sealed class GetShitDoneTests : IDisposable
     }
 
     [Fact]
+    public void Gate_counts_close_outs_unless_told_done_only()
+    {
+        var log = new CommitmentLog(_path);
+        var a = log.Add("a", Noon)!;
+        var b = log.Add("b", Noon)!;
+        log.Close(a.Id, Outcome.Done, Noon);
+
+        Assert.Equal("1 of 2 closed out today.", new GateRule { MinClosed = 2 }.Unmet(log, Noon));
+        Assert.Equal("1 still open today.", new GateRule { NothingOpen = true }.Unmet(log, Noon));
+
+        log.Close(b.Id, Outcome.Skipped, Noon);
+        Assert.Null(new GateRule { MinClosed = 2, NothingOpen = true }.Unmet(log, Noon));
+        Assert.Equal("1 of 2 done today.", new GateRule { MinClosed = 2, DoneOnly = true }.Unmet(log, Noon));
+        // A new day starts from nothing.
+        Assert.NotNull(new GateRule { MinClosed = 2 }.Unmet(log, Noon.AddDays(1)));
+    }
+
+    [Fact]
+    public void Gate_time_is_measured_within_the_four_am_day()
+    {
+        var log = new CommitmentLog(_path);
+        var rule = new GateRule { NotBefore = new TimeOnly(17, 0) };
+
+        Assert.NotNull(rule.Unmet(log, Noon));
+        Assert.Null(rule.Unmet(log, Noon.AddHours(5)));
+        Assert.Null(rule.Unmet(log, new DateTime(2026, 9, 30, 1, 0, 0)));
+        Assert.NotNull(rule.Unmet(log, new DateTime(2026, 9, 30, 4, 0, 0)));
+        Assert.Null(new GateRule().Unmet(log, Noon));
+    }
+
+    [Fact]
     public void Review_of_an_empty_log_says_so()
     {
         var sections = Review.Build(new CommitmentLog(_path).All, Noon);

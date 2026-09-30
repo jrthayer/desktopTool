@@ -46,6 +46,21 @@ be read is copied to `commitments.json.corrupt` before anything is written over 
 checks every 30 seconds for the day having rolled over, which is when anything left open from the
 previous day becomes "no check-in".
 
+## Gates (not switched on)
+
+The code for holding something back until the day's requirements are met exists but nothing uses
+it yet - no setting, no tray item, nothing constructed at startup.
+
+- [`GateRule`](GateRule.cs) is the requirement itself: a number of today's commitments closed out
+  (or strictly done), nothing left open, and/or not before a time of day.
+- [`ProgramGate`](ProgramGate.cs) ends a list of programs whenever they're found running while the
+  rule isn't met. It can't stop them starting, so they appear for a moment first, and it can't end
+  anything running as administrator.
+- [`ShutdownGate`](ShutdownGate.cs) objects to a shutdown while the rule isn't met, which puts the
+  reason on Windows' own "preventing shutdown" screen. "Shut down anyway" still works.
+
+Both are speed bumps: quitting Desktop Tool turns them off. Only `GateRule` is covered by tests.
+
 ## Tests
 
 `tests/DesktopTool.Tests` covers the log, parser, and review (`dotnet test`). Desktop Tool has to be
