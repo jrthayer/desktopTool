@@ -182,10 +182,9 @@ internal sealed class FenceForm : LayeredWidgetForm
     public event EventHandler<string>? FolderDroppedOnEmptyFence;
 
     /// <summary>Whether this fence currently holds no items at all - used by FolderFenceForm's own
-    /// cross-fence item drag (see its own ComputeDragHint/OnMouseUp) to know a subfolder dropped
-    /// here would convert this fence into a folder fence instead of just adding an ordinary
-    /// shortcut - the same rule an OLE folder drop already follows (see IsFolderConversionDrop),
-    /// just checked from outside this class since that drag never goes through OnDragDrop at all.</summary>
+    /// item drag hint (see its own ComputeDragHint) to know a subfolder dropped here would convert
+    /// this fence into a folder fence instead of just adding an ordinary shortcut (see
+    /// IsFolderConversionDrop).</summary>
     internal bool IsEmpty => _model.Files.Count == 0;
 
     /// <summary>Runs OCD Fence Sizing's own fit-to-content once, immediately - same call

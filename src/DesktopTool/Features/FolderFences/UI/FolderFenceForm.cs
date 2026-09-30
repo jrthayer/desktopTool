@@ -21,12 +21,12 @@ namespace DesktopTool.Features.FolderFences.UI;
 /// subfolder browses into it in place; the header shows a breadcrumb of however deep that's gone
 /// (see DisplayTitle), and a back button to its own left (see PaintBackButton/BackButtonRect) goes
 /// back up a level. Nothing here is reorderable or renameable the way FenceForm's own items are,
-/// since there's no per-item state of this widget's own to reorder/rename in the first place - a
-/// grid item CAN be dragged onto a different widget, though (see OnMouseDown/OnMouseMove/OnMouseUp):
-/// onto an ordinary fence, it just adds a reference to the same real file there (see
-/// FenceManager.AddFiles); a dragged subfolder onto a *different*, still-empty folder fence connects
-/// that fence to it instead (see ConnectFolder), the same as dropping it there directly would. The
-/// real file, and so this fence's own live mirror of it, is untouched either way.
+/// since there's no per-item state of this widget's own to reorder/rename in the first place. A
+/// grid item drags out as a real file (see RunItemDrag), so it behaves exactly like one dragged
+/// from Explorer: onto an ordinary fence it adds a reference (see FenceManager.AddFiles); onto
+/// Explorer, the desktop, or a sub-folder tile / populated folder fence it's moved or copied for
+/// real (see OnDragDrop); and a subfolder onto a still-empty fence or folder fence converts or
+/// connects it.
 ///
 /// Move, resize, snap, rename, and the Settings button/dropdown are all LayeredWidgetForm's own -
 /// this class only supplies the small hooks those need plus everything genuinely specific to a
@@ -90,9 +90,9 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     private readonly FolderFenceModel _model;
     private readonly FolderFenceManager _manager;
-    // Only ever used to hand an item off to a different fence it gets dragged onto (see
-    // OnMouseUp/ComputeDragHint below) - the same reference this widget's own base constructor
-    // already takes for snapping, just also kept here since dragging a grid item out needs it too.
+    // Only ever used to word the drag hint for an item over a different fence (see ComputeDragHint
+    // below) - the same reference this widget's own base constructor already takes for snapping,
+    // just also kept here since dragging a grid item out needs it too.
     private readonly FenceManager _fences;
     private readonly Dictionary<string, Icon?> _iconCache = new();
     private readonly List<GridEntry> _entries = new();
@@ -114,34 +114,45 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     private bool _plusButtonArmed;
     private bool _backButtonArmed;
 
-    // In-app drag of a grid item onto a different (ordinary) fence - same arm-then-drag-then-drop
-    // shape as FenceForm's own item drag, just one-directional: a folder fence's own contents are
-    // always whatever's really in the folder (see RefreshEntries), so there's no equivalent of
-    // FenceForm's same-fence reorder or "drag off onto the desktop removes it" - landing anywhere
-    // that isn't a different live fence just cancels the drag with no effect.
+    // Drag of a grid item out of this fence - arms on mouse-down, then past DragThreshold hands the
+    // item's real path to Windows' own DoDragDrop (see RunItemDrag), so it lands anywhere a file
+    // from Explorer could: Explorer/the desktop/other apps, every fence's own OnDragDrop, and
+    // sub-folder tiles in this or another folder fence. _draggingEntry is the entry itself rather
+    // than an index - the watcher can refresh _entries mid-drag (a drop into one of this fence's
+    // own sub-folders, say), and a stale index would then point at the wrong item.
     private const int DragThreshold = 4;
     private int? _dragArmIndex;
     private Point _dragArmPoint;
-    private int? _draggingIndex;
+    private GridEntry? _draggingEntry;
     private DragGhostWindow? _dragGhost;
 
     public Guid FolderFenceId => _model.Id;
 
-    /// <summary>Whether this folder fence is still in its empty "+" state - used by a *different*
-    /// folder fence's own cross-fence item drag (see its own ComputeDragHint/OnMouseUp) to know a
-    /// dragged subfolder landing here would connect this fence, the same rule a populated folder
-    /// fence's own OnDragEnter/OnDragDrop already enforces for an external OLE drop.</summary>
+    /// <summary>Whether this folder fence is still in its empty "+" state - used by a folder fence's
+    /// own item drag hint (see ComputeDragHint) to know a dragged subfolder landing here would
+    /// connect this fence (see OnDragDrop) rather than be moved/copied into it.</summary>
     internal bool IsEmpty => _model.RootFolderPath is null;
 
-    /// <summary>Used only for the cross-fence "Connect to {name}" drag hint (see another folder
-    /// fence's own ComputeDragHint) - every other cross-fence reference goes through FolderFenceId/
-    /// FolderFenceManager instead. Mirrors FenceForm.FenceName.</summary>
+    /// <summary>Used only for the "Connect to {name}" drag hint (see ComputeDragHint) - every other
+    /// cross-fence reference goes through FolderFenceId/FolderFenceManager instead. Mirrors
+    /// FenceForm.FenceName.</summary>
     internal string FolderFenceName => _model.Name;
 
-    /// <summary>Points this fence at path from outside - a different folder fence's own item drag
-    /// landing here (see its own OnMouseUp) rather than an OLE drop or the empty "+" button, but
-    /// otherwise identical to either of those (see SetRootFolder itself).</summary>
-    internal void ConnectFolder(string path) => SetRootFolder(path);
+    /// <summary>The folder a file drop at screenPoint would land in - the sub-folder tile under the
+    /// point if there is one, otherwise whichever folder is currently showing - plus the name the
+    /// drag hint pill shows for it and that tile's index (-1 for the current folder itself, which
+    /// has no tile to highlight). Null for an empty fence (a drop connects it instead - see
+    /// OnDragDrop) or a folder that's since vanished.</summary>
+    internal (string Path, string Name, int TileIndex)? DropTargetAt(Point screenPoint)
+    {
+        var dir = CurrentDirectory;
+        if (dir is null || !Directory.Exists(dir))
+            return null;
+
+        if (IndexAtGridPosition(ToContent(PointToClient(screenPoint))) is int index && _entries[index].IsDirectory)
+            return (_entries[index].Path, GetDisplayName(_entries[index]), index);
+        return (dir, _currentSubPath is null ? _model.Name : Path.GetFileName(dir), -1);
+    }
 
     /// <summary>Which model LayeredWidgetForm's own theme derivation and default Settings-dropdown
     /// rows read from - FolderFenceModel already implements IWidgetStyle.</summary>
@@ -524,8 +535,17 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         return HTCLIENT;
     }
 
-    protected override void OnDragEnter(DragEventArgs e)
+    protected override void OnDragEnter(DragEventArgs e) => UpdateDropEffect(e);
+
+    // Re-evaluated on every move, not just on enter - the target (and so the effect) changes as the
+    // cursor crosses sub-folder tiles, and Ctrl/Shift can flip move/copy mid-drag.
+    protected override void OnDragOver(DragEventArgs e) => UpdateDropEffect(e);
+
+    protected override void OnDragLeave(EventArgs e) => SetHoverIndex(-1);
+
+    private void UpdateDropEffect(DragEventArgs e)
     {
+        e.Effect = DragDropEffects.None;
         if (e.Data?.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } paths)
             return;
 
@@ -536,17 +556,50 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             return;
         }
 
-        var dir = CurrentDirectory;
-        if (dir is not null && Directory.Exists(dir))
-            e.Effect = SameDrive(paths, dir) ? DragDropEffects.Move : DragDropEffects.Copy;
+        // Highlights the sub-folder tile a drop would land in, the same cue Explorer gives.
+        var target = DropTargetAt(new Point(e.X, e.Y));
+        if (target is { } t)
+            e.Effect = TransferEffect(paths, t.Path, e);
+        SetHoverIndex(e.Effect != DragDropEffects.None && target is { TileIndex: >= 0 } hit ? hit.TileIndex : -1);
     }
 
-    private static bool SameDrive(string[] paths, string dir) =>
-        paths.All(p => string.Equals(Path.GetPathRoot(Path.GetFullPath(p)), Path.GetPathRoot(Path.GetFullPath(dir)),
+    /// <summary>Explorer's own rule for a file drop into targetDir: Ctrl copies, Shift moves,
+    /// otherwise a move within one drive and a copy across drives - falling back to whichever of the
+    /// two the source allows. None when there's nothing to do: a folder into itself or its own
+    /// subtree, or every path already directly inside targetDir.</summary>
+    private static DragDropEffects TransferEffect(string[] paths, string targetDir, DragEventArgs e)
+    {
+        const int ShiftKey = 4;
+        const int CtrlKey = 8;
+
+        var target = Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetDir));
+        var anythingToTransfer = false;
+        foreach (var path in paths)
+        {
+            var source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+            if (string.Equals(source, target, StringComparison.OrdinalIgnoreCase)
+                || target.StartsWith(source + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return DragDropEffects.None;
+            if (!string.Equals(Path.GetDirectoryName(source), target, StringComparison.OrdinalIgnoreCase))
+                anythingToTransfer = true;
+        }
+        if (!anythingToTransfer)
+            return DragDropEffects.None;
+
+        var sameDrive = paths.All(p => string.Equals(Path.GetPathRoot(Path.GetFullPath(p)), Path.GetPathRoot(target),
             StringComparison.OrdinalIgnoreCase));
+        var preferred = (e.KeyState & CtrlKey) != 0 ? DragDropEffects.Copy
+            : (e.KeyState & ShiftKey) != 0 ? DragDropEffects.Move
+            : sameDrive ? DragDropEffects.Move : DragDropEffects.Copy;
+        if ((e.AllowedEffect & preferred) != 0)
+            return preferred;
+        var fallback = preferred == DragDropEffects.Move ? DragDropEffects.Copy : DragDropEffects.Move;
+        return (e.AllowedEffect & fallback) != 0 ? fallback : DragDropEffects.None;
+    }
 
     protected override void OnDragDrop(DragEventArgs e)
     {
+        SetHoverIndex(-1);
         if (e.Data?.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } paths)
             return;
 
@@ -558,12 +611,14 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             return;
         }
 
-        // A populated fence mirrors a real folder, so a drop moves (same drive) or copies
-        // (different drive) the files into whichever sub-folder is currently showing, like
-        // Explorer. The watcher then picks up the change and refreshes the grid.
-        var dir = CurrentDirectory;
-        if (dir is not null && Directory.Exists(dir))
-            FileTransferOperations.TransferInto(Handle, paths, dir);
+        // A populated fence mirrors a real folder, so a drop moves or copies the files for real -
+        // into the sub-folder tile it landed on, or else whichever folder is currently showing,
+        // like Explorer. The watcher then picks up the change and refreshes the grid.
+        if (DropTargetAt(new Point(e.X, e.Y)) is not { } target)
+            return;
+        var effect = TransferEffect(paths, target.Path, e);
+        if (effect != DragDropEffects.None)
+            FileTransferOperations.TransferInto(Handle, paths, target.Path, move: effect == DragDropEffects.Move);
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
@@ -626,27 +681,16 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             return;
         }
 
-        if (_draggingIndex is null && _dragArmIndex is int armIndex && MouseButtons == MouseButtons.Left)
+        if (_draggingEntry is null && _dragArmIndex is int armIndex && MouseButtons == MouseButtons.Left)
         {
             var dx = e.X - _dragArmPoint.X;
             var dy = e.Y - _dragArmPoint.Y;
             if (dx * dx + dy * dy >= DragThreshold * DragThreshold)
             {
-                _draggingIndex = armIndex;
                 _dragArmIndex = null;
-                Capture = true;
-
-                var entry = _entries[armIndex];
-                _dragGhost = new DragGhostWindow(GetIcon(entry.Path), GetDisplayName(entry));
+                RunItemDrag(_entries[armIndex]);
+                return;
             }
-        }
-
-        if (_draggingIndex is not null)
-        {
-            _dragGhost?.SetHint(ComputeDragHint(e.Location));
-            _dragGhost?.MoveTo(PointToScreen(e.Location));
-            RenderAndPresent();
-            return;
         }
 
         SetHoverIndex(_model.RootFolderPath is null ? -1 : IndexAtGridPosition(ToContent(e.Location)) ?? -1);
@@ -654,24 +698,65 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         // ExtraButtons) - base.OnMouseMove above already ran UpdateButtonHover.
     }
 
-    /// <summary>Live drop-target hint for a grid item drag (see _draggingIndex), shown in the pill
-    /// below the drag ghost - mirrors FenceForm's own ComputeDragHint, minus every same-fence case
-    /// (nothing here is reorderable) and minus its own "Remove from Fence" fallback (a folder
-    /// fence's own contents are never removable by dragging - see the class's own doc comment).
-    /// Checks ordinary fences first, then other folder fences - a screen point can only ever land on
-    /// one live widget at a time, so the order between the two only matters in the (never actually
-    /// possible in practice) case of two fences occupying the exact same screen space.</summary>
-    private string? ComputeDragHint(Point windowLocation)
+    /// <summary>Hands entry to Windows' own drag-and-drop loop so it can land anywhere a real file
+    /// can - Explorer, the desktop, other apps, and every fence's own OnDragDrop (which already
+    /// covers add-to-fence, Recycle Bin, convert and connect) - while keeping this app's own ghost
+    /// card + hint pill: DoDragDrop's modal loop swallows this form's mouse messages until the drop,
+    /// so OnGiveFeedback moves the ghost instead. Blocks until the drop lands or Esc cancels it. The
+    /// source never deletes anything itself afterwards - a move is carried out by whichever target
+    /// accepted it, and the watcher refreshes this grid.</summary>
+    private void RunItemDrag(GridEntry entry)
     {
-        if (_draggingIndex is not int sourceIndex)
+        _draggingEntry = entry;
+        _dragGhost = new DragGhostWindow(GetIcon(entry.Path), GetDisplayName(entry));
+        _dragGhost.MoveTo(Cursor.Position);
+        SetHoverIndex(-1);
+        RenderAndPresent();
+        try
+        {
+            // Link is offered alongside Copy/Move because an empty fence or folder fence answers a
+            // single-folder drop with Link (convert/connect - see their own OnDragEnter), which OLE
+            // would otherwise refuse outright.
+            DoDragDrop(new DataObject(DataFormats.FileDrop, new[] { entry.Path }),
+                DragDropEffects.Copy | DragDropEffects.Move | DragDropEffects.Link);
+        }
+        finally
+        {
+            _draggingEntry = null;
+            _dragGhost?.Dispose();
+            _dragGhost = null;
+            RenderAndPresent();
+        }
+    }
+
+    // Called by DoDragDrop after every DragOver the current target answers (or on every move with
+    // no target at all), so it tracks the cursor as closely as OnMouseMove did before. The default
+    // OS cursor stays, carrying its own move/copy/no-drop badge beside the ghost.
+    protected override void OnGiveFeedback(GiveFeedbackEventArgs e)
+    {
+        base.OnGiveFeedback(e);
+        if (_dragGhost is null)
+            return;
+        var screenPoint = Cursor.Position;
+        _dragGhost.SetHint(ComputeDragHint(screenPoint, e.Effect));
+        _dragGhost.MoveTo(screenPoint);
+    }
+
+    /// <summary>Live drop-target hint for a grid item drag (see RunItemDrag), shown in the pill below
+    /// the drag ghost. effect is what the target under the cursor said it would do - None hides the
+    /// pill. Our own fences get specific wording that mirrors FenceForm's own ComputeDragHint; any
+    /// other window (Explorer, the desktop, another app) only gets the generic effect, since that's
+    /// all it tells us.</summary>
+    private string? ComputeDragHint(Point screenPoint, DragDropEffects effect)
+    {
+        if (_draggingEntry is not { } entry || effect == DragDropEffects.None)
             return null;
 
-        var screenPoint = PointToScreen(windowLocation);
         if (_fences.FindFenceAt(screenPoint, _model.Id) is { } targetForm)
         {
-            // Same rule OnMouseUp itself applies (see there) - a subfolder dropped on a currently
-            // empty fence converts it instead of adding an ordinary shortcut.
-            if (_entries[sourceIndex].IsDirectory && targetForm.IsEmpty)
+            // Same rule FenceForm.OnDragDrop applies - a subfolder dropped on a currently empty
+            // fence converts it instead of adding an ordinary shortcut.
+            if (entry.IsDirectory && targetForm.IsEmpty)
                 return "Convert to Folder Fence";
 
             var targetIndex = targetForm.IndexForExternalDrop(screenPoint);
@@ -680,15 +765,24 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
                 : $"Add to {targetForm.FenceName}";
         }
 
-        // A folder fence never accepts anything but a single subfolder, and only while it's still
-        // empty - same rule an OLE drop onto one already follows (see OnDragEnter/OnDragDrop) -
-        // there's no equivalent of the ordinary-fence branch's "Add to"/"Move to Recycle Bin" cases
-        // here, a populated target or a plain file just isn't a valid drop anywhere on it.
-        if (_entries[sourceIndex].IsDirectory
-            && _manager.FindFolderFenceAt(screenPoint, _model.Id) is { IsEmpty: true } targetFolderFence)
-            return $"Connect to {targetFolderFence.FolderFenceName}";
+        var verb = (effect & DragDropEffects.Move) != 0 ? "Move"
+            : (effect & DragDropEffects.Copy) != 0 ? "Copy"
+            : null;
 
-        return null;
+        // Any folder fence, this one included - dropping onto one of this fence's own sub-folder
+        // tiles moves the item there.
+        if (_manager.FindFolderFenceAt(screenPoint, Guid.Empty) is { } folderFence)
+        {
+            if (folderFence.IsEmpty)
+                return $"Connect to {folderFence.FolderFenceName}";
+            return verb is not null && folderFence.DropTargetAt(screenPoint) is { } target
+                ? $"{verb} to {target.Name}"
+                : null;
+        }
+
+        return verb is not null ? $"{verb} here"
+            : (effect & DragDropEffects.Link) != 0 ? "Create shortcut here"
+            : null;
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -735,54 +829,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             return;
         }
 
+        // A completed item drag never gets here - DoDragDrop consumes its mouse-up (see RunItemDrag).
         _dragArmIndex = null;
-        if (_draggingIndex is not int sourceIndex)
-            return;
-
-        Capture = false;
-        _draggingIndex = null;
-        _dragGhost?.Dispose();
-        _dragGhost = null;
-
-        var entry = _entries[sourceIndex];
-        var screenPoint = PointToScreen(e.Location);
-        if (_fences.FindFenceAt(screenPoint, _model.Id) is { } targetForm)
-        {
-            // A subfolder dropped on a currently empty fence converts it into a folder fence
-            // instead of adding an ordinary shortcut - same rule/mechanism an OLE folder drop onto
-            // an empty fence already follows (see FenceForm.IsFolderConversionDrop/
-            // FolderDroppedOnEmptyFence), just triggered from here since this drag never goes
-            // through OnDragDrop at all. TakeForConversion re-checks emptiness itself (this fence
-            // could have stopped being empty since the hint was last computed) and returns null if
-            // it no longer qualifies, in which case this just falls through to an ordinary add below.
-            if (entry.IsDirectory && _fences.TakeForConversion(targetForm.FenceId) is { } source)
-            {
-                _manager.ConvertFromFence(source, entry.Path);
-            }
-            else
-            {
-                var targetIndex = targetForm.IndexForExternalDrop(screenPoint);
-                if (_fences.IsRecycleBinAt(targetForm.FenceId, targetIndex))
-                    _fences.DeletePaths(new[] { entry.Path }, Handle);
-                else
-                    _fences.AddFiles(targetForm.FenceId, new[] { entry.Path });
-            }
-        }
-        // A subfolder dropped on a different, still-empty folder fence connects it - same rule/
-        // mechanism an OLE folder drop onto one already follows (see OnDragEnter/OnDragDrop), just
-        // triggered from here since this drag never goes through OnDragDrop at all. Re-checks
-        // IsEmpty itself (that fence could have stopped being empty since the hint was last
-        // computed) rather than trusting ComputeDragHint's own earlier read of it.
-        else if (entry.IsDirectory && _manager.FindFolderFenceAt(screenPoint, _model.Id) is { IsEmpty: true } targetFolderFence)
-        {
-            targetFolderFence.ConnectFolder(entry.Path);
-        }
-        // Landing anywhere else (empty desktop, back over this same fence, a populated folder fence,
-        // a plain file over any folder fence) just cancels the drag - see this widget's own drag
-        // fields' doc comment for why there's no "remove"/"reorder" case to fall back to here the
-        // way FenceForm's own OnMouseUp has.
-
-        RenderAndPresent();
     }
 
     protected override void OnMouseDoubleClick(MouseEventArgs e)
@@ -1406,7 +1454,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         for (int i = 0; i < _entries.Count; i++)
         {
             var entry = _entries[i];
-            var isDragSource = i == _draggingIndex;
+            var isDragSource = _draggingEntry is { } dragging && string.Equals(entry.Path, dragging.Path, StringComparison.OrdinalIgnoreCase);
             var column = i % columns;
             var row = i / columns;
             var cellX = GridPadding + column * CellWidth;

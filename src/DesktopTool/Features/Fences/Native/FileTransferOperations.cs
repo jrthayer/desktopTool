@@ -3,9 +3,10 @@ using System.Runtime.InteropServices;
 namespace DesktopTool.Features.Fences.Native;
 
 /// <summary>
-/// Moves or copies dropped files into a folder with Explorer's own default drag rule: a move when
-/// source and destination share a drive, a copy otherwise. Uses SHFileOperationW for the same
-/// reason RecycleBinOperations does - one P/Invoke, and Explorer's own conflict/progress/error UI.
+/// Moves or copies dropped files into a folder. The caller picks which (see
+/// FolderFenceForm.TransferEffect for Explorer's own drive/modifier-key rule). Uses SHFileOperationW
+/// for the same reason RecycleBinOperations does - one P/Invoke, and Explorer's own
+/// conflict/progress/error UI.
 /// </summary>
 internal static class FileTransferOperations
 {
@@ -20,19 +21,15 @@ internal static class FileTransferOperations
     /// <summary>Transfers every path into destinationDir in one batched operation. Paths already
     /// directly inside destinationDir are skipped (dropping a file onto its own folder is a no-op,
     /// not a "file (2)" duplicate). Returns false if nothing was transferred.</summary>
-    public static bool TransferInto(IntPtr ownerHwnd, IReadOnlyList<string> paths, string destinationDir)
+    public static bool TransferInto(IntPtr ownerHwnd, IReadOnlyList<string> paths, string destinationDir, bool move)
     {
-        var destFull = Path.GetFullPath(destinationDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var destFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationDir));
         var sources = paths
-            .Select(Path.GetFullPath)
-            .Where(p => !string.Equals(
-                Path.GetDirectoryName(p.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
-                destFull, StringComparison.OrdinalIgnoreCase))
+            .Select(p => Path.TrimEndingDirectorySeparator(Path.GetFullPath(p)))
+            .Where(p => !string.Equals(Path.GetDirectoryName(p), destFull, StringComparison.OrdinalIgnoreCase))
             .ToList();
         if (sources.Count == 0)
             return false;
-
-        var sameDrive = sources.All(p => string.Equals(Path.GetPathRoot(p), Path.GetPathRoot(destFull), StringComparison.OrdinalIgnoreCase));
 
         // pFrom/pTo need double-null-terminated buffers, built manually (see RecycleBinOperations).
         var pFrom = Marshal.StringToHGlobalUni(string.Join('\0', sources) + "\0\0");
@@ -42,7 +39,7 @@ internal static class FileTransferOperations
             var fileOp = new SHFILEOPSTRUCTW
             {
                 hwnd = ownerHwnd,
-                wFunc = sameDrive ? FO_MOVE : FO_COPY,
+                wFunc = move ? FO_MOVE : FO_COPY,
                 pFrom = pFrom,
                 pTo = pTo,
                 fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR,

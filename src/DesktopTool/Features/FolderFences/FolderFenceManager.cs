@@ -169,11 +169,10 @@ public sealed class FolderFenceManager : IDisposable
     /// FenceManager.AnyVisible.</summary>
     public bool AnyVisible => _forms.Values.Any(f => f.Visible);
 
-    /// <summary>Finds the folder fence window (other than excludeId) whose window rect contains
-    /// screenPoint - mirrors FenceManager.FindFenceAt, used when a folder fence's own grid-item drag
-    /// (see FolderFenceForm.OnMouseUp/ComputeDragHint) is released over a *different* folder fence
-    /// instead of an ordinary one, so a dragged subfolder can connect an empty target the same way
-    /// dropping it there directly (OLE, or the "+" button) already would.</summary>
+    /// <summary>Finds the folder fence window (other than excludeId - Guid.Empty excludes none)
+    /// whose window rect contains screenPoint - mirrors FenceManager.FindFenceAt, used to word the
+    /// hint pill while a folder fence's own grid item is dragged over one (see
+    /// FolderFenceForm.ComputeDragHint).</summary>
     internal FolderFenceForm? FindFolderFenceAt(Point screenPoint, Guid excludeId)
     {
         foreach (var (id, form) in _forms)
