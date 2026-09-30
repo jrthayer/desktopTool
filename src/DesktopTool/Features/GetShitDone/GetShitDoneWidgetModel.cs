@@ -1,15 +1,15 @@
 using DesktopTool.UI;
 
-namespace DesktopTool.Features.Commitments;
+namespace DesktopTool.Features.GetShitDone;
 
-/// <summary>Persisted state for the on-screen Commitments widget (see UI.CommitmentsWidget) - same
+/// <summary>Persisted state for the on-screen Get Shit Done widget (see UI.GetShitDoneWidget) - same
 /// shape as ClaudePipelineModel, minus RowsShown/AlwaysMaxRows: this widget's list simply fills
 /// whatever body height it's been resized to. Only the widget's own look/position lives here - the
 /// commitments themselves are CommitmentLog's own file.</summary>
-public sealed class CommitmentsWidgetModel : WidgetStyleModel
+public sealed class GetShitDoneWidgetModel : WidgetStyleModel
 {
     /// <summary>Null until the widget has actually been moved/resized once - see
-    /// CommitmentsWidget's own CreateParams, which centers on the primary screen at a default size
+    /// GetShitDoneWidget's own CreateParams, which centers on the primary screen at a default size
     /// instead of guessing a fixed default that might not exist on every monitor layout.</summary>
     public int? X { get; set; }
     public int? Y { get; set; }

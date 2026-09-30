@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace DesktopTool.Features.Commitments;
+namespace DesktopTool.Features.GetShitDone;
 
 public enum DayStatus
 {

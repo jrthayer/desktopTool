@@ -1,9 +1,9 @@
-using DesktopTool.Features.Commitments;
+using DesktopTool.Features.GetShitDone;
 using Xunit;
 
 namespace DesktopTool.Tests;
 
-public sealed class CommitmentsTests : IDisposable
+public sealed class GetShitDoneTests : IDisposable
 {
     private readonly string _path = Path.Combine(Path.GetTempPath(), $"commitments-test-{Guid.NewGuid():N}.json");
     private static readonly DateTime Noon = new(2026, 9, 29, 12, 0, 0);

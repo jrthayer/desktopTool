@@ -29,7 +29,7 @@ there's no toggle-switch control elsewhere in the app to reuse), and its own act
   as a drag candidate app-wide, while fence-to-fence edge snapping keeps working either way - see
   [Fences: Snap lines](../Fences/README.md#snap-lines). **Edit** opens **Manage Snap Lines...** -
   editing lines works regardless of the switch's state.
-- **Get Shit Done** - the switch shows/hides the [Get Shit Done](../Commitments/README.md) widget
+- **Get Shit Done** - the switch shows/hides the [Get Shit Done](../GetShitDone/README.md) widget
   (reads/flips its own `Visible`). No action button.
 
 ## Settings

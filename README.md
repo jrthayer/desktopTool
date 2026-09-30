@@ -73,9 +73,9 @@ The **Get Shit Done** widget: commit to a few small things for the day, close ea
 out as done, partly done, or skipped, and review how the outcomes break down
 over time.
 
-See [`src/DesktopTool/Features/Commitments/README.md`](src/DesktopTool/Features/Commitments/README.md)
+See [`src/DesktopTool/Features/GetShitDone/README.md`](src/DesktopTool/Features/GetShitDone/README.md)
 for how to use it and where its data lives. All of its code lives under
-[`src/DesktopTool/Features/Commitments`](src/DesktopTool/Features/Commitments).
+[`src/DesktopTool/Features/GetShitDone`](src/DesktopTool/Features/GetShitDone).
 
 ### Snapping
 

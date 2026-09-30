@@ -5,7 +5,7 @@ using DesktopTool.Features.Readme.UI;
 using DesktopTool.Native;
 using DesktopTool.UI;
 
-namespace DesktopTool.Features.Commitments.UI;
+namespace DesktopTool.Features.GetShitDone.UI;
 
 /// <summary>
 /// "Get Shit Done" widget - the front end for CommitmentLog. Lists today's commitments as rows; an open row
@@ -18,7 +18,7 @@ namespace DesktopTool.Features.Commitments.UI;
 /// Everything not genuinely specific to this widget (theme derivation, the Settings dropdown's default
 /// rows, button/border/title/list painting) is LayeredWidgetForm's own - see its own class comment.
 /// </summary>
-internal sealed class CommitmentsWidget : LayeredWidgetForm
+internal sealed class GetShitDoneWidget : LayeredWidgetForm
 {
     private const int OuterMarginPx = 13;
     private const int HeaderHeight = 28;
@@ -35,15 +35,15 @@ internal sealed class CommitmentsWidget : LayeredWidgetForm
     private static readonly int[] BottomRowWidths = { 96, 76 };
 
     // Exactly fits a full default day (CommitmentLog.DefaultMaxPerDay rows) with the two bottom
-    // buttons side by side, which they are at CommitmentsWidgetModel's own default Width.
+    // buttons side by side, which they are at GetShitDoneWidgetModel's own default Width.
     private const int DefaultBodyHeight = HeaderHeight + ListVerticalPadding * 2
         + CommitmentLog.DefaultMaxPerDay * ListRowHeightConst + StatusHeight + BottomRowHeight + BottomRowBottomPadding;
 
     private const int ReviewDays = 30;
 
     private readonly CommitmentLog _log;
-    private readonly CommitmentsWidgetModel _model;
-    private readonly CommitmentsWidgetStore _store;
+    private readonly GetShitDoneWidgetModel _model;
+    private readonly GetShitDoneWidgetStore _store;
 
     // Today's rows, refreshed (see RefreshToday) whenever the log or the day itself changes rather
     // than re-queried on every paint/hit-test.
@@ -95,7 +95,7 @@ internal sealed class CommitmentsWidget : LayeredWidgetForm
 
     protected override IWidgetStyle Style => _model;
 
-    public CommitmentsWidget(CommitmentLog log, FenceManager fenceManager, CommitmentsWidgetModel model, CommitmentsWidgetStore store)
+    public GetShitDoneWidget(CommitmentLog log, FenceManager fenceManager, GetShitDoneWidgetModel model, GetShitDoneWidgetStore store)
         : base(model.Opacity / 100f, fenceManager)
     {
         _log = log;
@@ -516,7 +516,7 @@ internal sealed class CommitmentsWidget : LayeredWidgetForm
 
     protected override void CopyAdditionalSettingsFrom(LayeredWidgetForm source)
     {
-        if (source is CommitmentsWidget other)
+        if (source is GetShitDoneWidget other)
             _model.MaxPerDay = other._model.MaxPerDay;
     }
 

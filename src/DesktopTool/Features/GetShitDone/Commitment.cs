@@ -1,4 +1,4 @@
-namespace DesktopTool.Features.Commitments;
+namespace DesktopTool.Features.GetShitDone;
 
 /// <summary>How a commitment ended. NoCheckIn is never chosen by hand - it's what an Open commitment
 /// becomes once its day has passed without being closed out (see CommitmentLog.SweepStale), so a

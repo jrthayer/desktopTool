@@ -1,7 +1,7 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using DesktopTool.Features.ClaudePipeline.UI;
-using DesktopTool.Features.Commitments.UI;
+using DesktopTool.Features.GetShitDone.UI;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.FolderFences;
 using DesktopTool.Features.Layouts.UI;
@@ -45,7 +45,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
     private readonly LayoutLauncherWidget _layoutLauncher;
     private readonly ClaudePipelineWidget _claudePipeline;
-    private readonly CommitmentsWidget _commitments;
+    private readonly GetShitDoneWidget _getShitDone;
     private readonly FolderFenceManager _folderFences;
     private readonly WidgetManagerModel _model;
     private readonly WidgetManagerStore _store;
@@ -132,12 +132,12 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// rows read from - WidgetManagerModel already implements IWidgetStyle.</summary>
     protected override IWidgetStyle Style => _model;
 
-    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, ClaudePipelineWidget claudePipeline, CommitmentsWidget commitments, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
+    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, ClaudePipelineWidget claudePipeline, GetShitDoneWidget getShitDone, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
         : base(model.Opacity / 100f, fenceManager)
     {
         _layoutLauncher = layoutLauncher;
         _claudePipeline = claudePipeline;
-        _commitments = commitments;
+        _getShitDone = getShitDone;
         _folderFences = folderFences;
         _model = model;
         _store = store;
@@ -147,7 +147,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         // repaints itself right there) - see LayoutLauncherWidget.VisibilityChanged's own doc comment.
         _layoutLauncher.VisibilityChanged += (_, _) => RefreshRowStates();
         _claudePipeline.VisibilityChanged += (_, _) => RefreshRowStates();
-        _commitments.VisibilityChanged += (_, _) => RefreshRowStates();
+        _getShitDone.VisibilityChanged += (_, _) => RefreshRowStates();
 
         ExtraButtons = new List<ChromeButton>
         {
@@ -710,7 +710,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         3 => Fences.SnapLines.WidgetEdgesEnabled,
         4 => Fences.HasRecycleBin,
         5 => _claudePipeline.Visible,
-        6 => _commitments.Visible,
+        6 => _getShitDone.Visible,
         _ => false,
     };
 
@@ -730,7 +730,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
                 if (Fences.HasRecycleBin) Fences.RemoveRecycleBin(); else Fences.AddRecycleBin();
                 break;
             case 5: _claudePipeline.ToggleVisible(); break;
-            case 6: _commitments.ToggleVisible(); break;
+            case 6: _getShitDone.ToggleVisible(); break;
         }
     }
 

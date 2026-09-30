@@ -1,10 +1,10 @@
 using System.Text.Json;
 
-namespace DesktopTool.Features.Commitments;
+namespace DesktopTool.Features.GetShitDone;
 
 /// <summary>Same shape as ClaudePipelineWidgetStore (plain JSON file under %AppData%\DesktopTool, for
-/// a single model rather than a list - there's only ever one Commitments widget).</summary>
-public sealed class CommitmentsWidgetStore
+/// a single model rather than a list - there's only ever one Get Shit Done widget).</summary>
+public sealed class GetShitDoneWidgetStore
 {
     private static readonly string DirectoryPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DesktopTool");
@@ -13,23 +13,23 @@ public sealed class CommitmentsWidgetStore
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
-    public CommitmentsWidgetModel Load()
+    public GetShitDoneWidgetModel Load()
     {
         if (!File.Exists(FilePath))
-            return new CommitmentsWidgetModel();
+            return new GetShitDoneWidgetModel();
 
         try
         {
             var json = File.ReadAllText(FilePath);
-            return JsonSerializer.Deserialize<CommitmentsWidgetModel>(json, SerializerOptions) ?? new CommitmentsWidgetModel();
+            return JsonSerializer.Deserialize<GetShitDoneWidgetModel>(json, SerializerOptions) ?? new GetShitDoneWidgetModel();
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            return new CommitmentsWidgetModel();
+            return new GetShitDoneWidgetModel();
         }
     }
 
-    public void Save(CommitmentsWidgetModel model)
+    public void Save(GetShitDoneWidgetModel model)
     {
         Directory.CreateDirectory(DirectoryPath);
         var json = JsonSerializer.Serialize(model, SerializerOptions);

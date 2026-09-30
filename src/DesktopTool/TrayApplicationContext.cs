@@ -1,7 +1,7 @@
 using DesktopTool.Features.ClaudePipeline;
 using DesktopTool.Features.ClaudePipeline.UI;
-using DesktopTool.Features.Commitments;
-using DesktopTool.Features.Commitments.UI;
+using DesktopTool.Features.GetShitDone;
+using DesktopTool.Features.GetShitDone.UI;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.FolderFences;
 using DesktopTool.Features.Layouts;
@@ -30,7 +30,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ClaudePipelineWidgetStore _claudePipelineWidgetStore = new();
     private readonly ClaudePipelineManager _claudePipelineManager;
 
-    private readonly CommitmentsWidgetStore _commitmentsWidgetStore = new();
+    private readonly GetShitDoneWidgetStore _getShitDoneWidgetStore = new();
 
     // At most one editor open at a time - OnManageLayouts activates this instead of opening a
     // second copy, the same "don't duplicate, just surface the existing one" idea FenceManager's
@@ -59,7 +59,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
     // Widget Manager's own Get Shit Done row.
-    private readonly CommitmentsWidget _commitments;
+    private readonly GetShitDoneWidget _getShitDone;
 
     // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
     // the tray's own top-level "Widget Manager" item rather than opened fresh each time.
@@ -90,13 +90,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _claudePipeline = new ClaudePipelineWidget(_claudePipelineManager, _fenceManager, claudePipelineModel, _claudePipelineWidgetStore);
         _claudePipeline.ManageFeaturesRequested += (_, featureId) => OpenPipelineEditor(featureId);
 
-        var commitmentsModel = _commitmentsWidgetStore.Load();
-        _commitments = new CommitmentsWidget(new CommitmentLog(), _fenceManager, commitmentsModel, _commitmentsWidgetStore);
+        var getShitDoneModel = _getShitDoneWidgetStore.Load();
+        _getShitDone = new GetShitDoneWidget(new CommitmentLog(), _fenceManager, getShitDoneModel, _getShitDoneWidgetStore);
 
-        // Needs _layoutLauncher/_claudePipeline/_commitments to already exist - their own rows
+        // Needs _layoutLauncher/_claudePipeline/_getShitDone to already exist - their own rows
         // read/toggle those widgets' Visible directly rather than through a separate manager class.
         var widgetManagerModel = _widgetManagerStore.Load();
-        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _claudePipeline, _commitments, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
+        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _claudePipeline, _getShitDone, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
         _widgetManager.EditLayoutsRequested += (_, _) => OpenLayoutEditor(null);
         _widgetManager.EditFeaturesRequested += (_, _) => OpenPipelineEditor(null);
         _widgetManager.HelpRequested += (_, _) => OpenReadme();
@@ -164,8 +164,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _layoutLauncher.Show();
         if (claudePipelineModel.Visible)
             _claudePipeline.Show();
-        if (commitmentsModel.Visible)
-            _commitments.Show();
+        if (getShitDoneModel.Visible)
+            _getShitDone.Show();
         if (widgetManagerModel.Visible)
             _widgetManager.Show();
 
@@ -255,7 +255,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _readmeForm?.Dispose();
         _layoutLauncher.Shutdown();
         _claudePipeline.Shutdown();
-        _commitments.Shutdown();
+        _getShitDone.Shutdown();
         _widgetManager.Shutdown();
         _fenceManager.Dispose();
         _folderFenceManager.Dispose();

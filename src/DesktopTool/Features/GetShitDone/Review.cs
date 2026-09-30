@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace DesktopTool.Features.Commitments;
+namespace DesktopTool.Features.GetShitDone;
 
 public sealed record ReviewSection(string Title, string Body);
 

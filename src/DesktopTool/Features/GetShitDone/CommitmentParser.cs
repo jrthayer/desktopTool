@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-namespace DesktopTool.Features.Commitments;
+namespace DesktopTool.Features.GetShitDone;
 
 /// <summary>Pulls the optional estimate and tag out of one typed line, so committing stays a single
 /// line of text: "draft the intro 45m #writing" is Text "draft the intro", 45 minutes, tag "writing".
