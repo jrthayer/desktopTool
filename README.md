@@ -67,6 +67,16 @@ See [`src/DesktopTool/Features/WidgetManager/README.md`](src/DesktopTool/Feature
 for the full feature writeup and known limitations. All of its code lives
 under [`src/DesktopTool/Features/WidgetManager`](src/DesktopTool/Features/WidgetManager).
 
+### Get Shit Done
+
+The **Get Shit Done** widget: commit to a few small things for the day, close each one
+out as done, partly done, or skipped, and review how the outcomes break down
+over time.
+
+See [`src/DesktopTool/Features/Commitments/README.md`](src/DesktopTool/Features/Commitments/README.md)
+for how to use it and where its data lives. All of its code lives under
+[`src/DesktopTool/Features/Commitments`](src/DesktopTool/Features/Commitments).
+
 ### Snapping
 
 The pure edge-snapping geometry (`SnapEngine`) that gives both Fences and

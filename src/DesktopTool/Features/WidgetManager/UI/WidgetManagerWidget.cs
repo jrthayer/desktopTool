@@ -1,6 +1,7 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using DesktopTool.Features.ClaudePipeline.UI;
+using DesktopTool.Features.Commitments.UI;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.FolderFences;
 using DesktopTool.Features.Layouts.UI;
@@ -13,7 +14,7 @@ namespace DesktopTool.Features.WidgetManager.UI;
 /// "Widget Manager" widget - a third, independent proof that LayeredWidgetForm's own chrome
 /// (move/resize/snap/rename/settings/theme/list) works for something that isn't a Fence or the
 /// Layout Launcher. Lists the app's toggleable widgets/switches - Fences, Layout Launcher, Snap
-/// Lines, Widget Snapping, Fence Trash Can, Claude Toolbox - each as a fixed row (never added to/removed from,
+/// Lines, Widget Snapping, Fence Trash Can, Claude Toolbox, Get Shit Done - each as a fixed row (never added to/removed from,
 /// unlike Layout Launcher's own saved-profile list) with an on/off switch and, for the three that
 /// have somewhere to go, a row-specific action button, so all of them can be reached without
 /// opening the tray menu. Everything not genuinely specific to this widget (theme derivation, the
@@ -30,7 +31,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private const int ButtonBandOverhang = 19;
     private const int TopMarginWithButtons = OuterMarginPx + ButtonBandOverhang;
 
-    private const int RowCountFixed = 6;
+    private const int RowCountFixed = 7;
     private const int ListVerticalPadding = 8;
     private const int ListHorizontalPadding = 10;
 
@@ -44,6 +45,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
     private readonly LayoutLauncherWidget _layoutLauncher;
     private readonly ClaudePipelineWidget _claudePipeline;
+    private readonly CommitmentsWidget _commitments;
     private readonly FolderFenceManager _folderFences;
     private readonly WidgetManagerModel _model;
     private readonly WidgetManagerStore _store;
@@ -71,7 +73,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         string Label, string ButtonTooltip, RowButtonIcon ButtonIcon,
         RowButtonIcon SecondButtonIcon = RowButtonIcon.None, string SecondButtonTooltip = "");
 
-    // Claude Pipeline last - IsRowOn/ToggleRow/FireRowButtonAction's own index switches below must
+    // Get Shit Done last - IsRowOn/ToggleRow/FireRowButtonAction's own index switches below must
     // stay in this same order.
     private static readonly WidgetRow[] Rows =
     {
@@ -81,6 +83,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         new("Widget Snapping", string.Empty, RowButtonIcon.None),
         new("Fence Trash Can", string.Empty, RowButtonIcon.None),
         new("Claude Toolbox", "Manage Features", RowButtonIcon.Cog),
+        new("Get Shit Done", string.Empty, RowButtonIcon.None),
     };
 
     // Row click handling - clicking a row's own switch flips that widget's on/off state; its
@@ -129,11 +132,12 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// rows read from - WidgetManagerModel already implements IWidgetStyle.</summary>
     protected override IWidgetStyle Style => _model;
 
-    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, ClaudePipelineWidget claudePipeline, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
+    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, ClaudePipelineWidget claudePipeline, CommitmentsWidget commitments, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
         : base(model.Opacity / 100f, fenceManager)
     {
         _layoutLauncher = layoutLauncher;
         _claudePipeline = claudePipeline;
+        _commitments = commitments;
         _folderFences = folderFences;
         _model = model;
         _store = store;
@@ -143,6 +147,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         // repaints itself right there) - see LayoutLauncherWidget.VisibilityChanged's own doc comment.
         _layoutLauncher.VisibilityChanged += (_, _) => RefreshRowStates();
         _claudePipeline.VisibilityChanged += (_, _) => RefreshRowStates();
+        _commitments.VisibilityChanged += (_, _) => RefreshRowStates();
 
         ExtraButtons = new List<ChromeButton>
         {
@@ -696,7 +701,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// fence is conceptually a kind of fence, so the two show/hide together under this one switch);
     /// Layout Launcher: the widget's own Visible; Snap Lines: SnapLineManager.Enabled; Widget
     /// Snapping: SnapLineManager.WidgetEdgesEnabled; Fence Trash Can: FenceManager.HasRecycleBin;
-    /// Claude Pipeline: the widget's own Visible. Same row order as Rows above.</summary>
+    /// Claude Pipeline/Get Shit Done: the widget's own Visible. Same row order as Rows above.</summary>
     private bool IsRowOn(int index) => index switch
     {
         0 => Fences.AnyVisible || _folderFences.AnyVisible,
@@ -705,6 +710,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         3 => Fences.SnapLines.WidgetEdgesEnabled,
         4 => Fences.HasRecycleBin,
         5 => _claudePipeline.Visible,
+        6 => _commitments.Visible,
         _ => false,
     };
 
@@ -724,6 +730,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
                 if (Fences.HasRecycleBin) Fences.RemoveRecycleBin(); else Fences.AddRecycleBin();
                 break;
             case 5: _claudePipeline.ToggleVisible(); break;
+            case 6: _commitments.ToggleVisible(); break;
         }
     }
 
@@ -734,7 +741,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case 0: Fences.CreateFence(); break;
             case 1: EditLayoutsRequested?.Invoke(this, EventArgs.Empty); break;
             case 2: Fences.SnapLines.EnterEditMode(); break;
-            // 3 (Widget Snapping) and 4 (Fence Trash Can) have no action button - RowButtonIcon.
+            // 3 (Widget Snapping), 4 (Fence Trash Can) and 6 (Get Shit Done) have no action button - RowButtonIcon.
             // None, never hit-testable.
             case 5: EditFeaturesRequested?.Invoke(this, EventArgs.Empty); break;
         }

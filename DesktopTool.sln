@@ -7,6 +7,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{D74A56CC-779
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopTool", "src\DesktopTool\DesktopTool.csproj", "{AAF5F5D1-D154-4737-9906-1EA79F61178C}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{5822F0CF-7F4D-4395-9924-BA069CD03BD7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopTool.Tests", "tests\DesktopTool.Tests\DesktopTool.Tests.csproj", "{CC443DDF-F464-478C-9101-276674A949C2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,8 +24,13 @@ Global
 		{AAF5F5D1-D154-4737-9906-1EA79F61178C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{AAF5F5D1-D154-4737-9906-1EA79F61178C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{AAF5F5D1-D154-4737-9906-1EA79F61178C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CC443DDF-F464-478C-9101-276674A949C2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CC443DDF-F464-478C-9101-276674A949C2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CC443DDF-F464-478C-9101-276674A949C2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CC443DDF-F464-478C-9101-276674A949C2}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{AAF5F5D1-D154-4737-9906-1EA79F61178C} = {D74A56CC-779E-4ACE-88F2-4421B6D3691A}
+		{CC443DDF-F464-478C-9101-276674A949C2} = {5822F0CF-7F4D-4395-9924-BA069CD03BD7}
 	EndGlobalSection
 EndGlobal
