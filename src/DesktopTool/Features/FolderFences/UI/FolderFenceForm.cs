@@ -105,6 +105,17 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     // than always starting at the root the way this used to.
     private string? _currentSubPath;
     private FileSystemWatcher? _watcher;
+    // One per folder above whatever's on screen, from RootFolderPath's own parent down to
+    // CurrentDirectory's parent (see RestartWatcher) - _watcher only ever sees its own folder's
+    // children, never the folder itself, so without these a rename/move/delete of the root (or of
+    // any subfolder between it and the level being browsed) went completely unnoticed and the grid
+    // kept showing stale entries pointing at paths that no longer existed.
+    private readonly List<FileSystemWatcher> _ancestorWatchers = new();
+
+    // RootFolderPath is set but that folder is gone (moved/deleted/drive unplugged) - shows the "+"
+    // again with a "folder not found" note (see PaintEmptyState) so it can be re-pointed, rather than
+    // an unexplained empty grid. Cached by RefreshEntries rather than hitting the disk every paint.
+    private bool _rootMissing;
 
     private ContextMenuStrip? _itemContextMenu;
     private GridEntry? _contextEntry;
@@ -131,7 +142,11 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     /// <summary>Whether this folder fence is still in its empty "+" state - used by a folder fence's
     /// own item drag hint (see ComputeDragHint) to know a dragged subfolder landing here would
     /// connect this fence (see OnDragDrop) rather than be moved/copied into it.</summary>
-    internal bool IsEmpty => _model.RootFolderPath is null;
+    internal bool IsEmpty => NeedsFolder;
+
+    /// <summary>Shows the "+" and accepts a folder to connect - either never pointed at one, or its
+    /// folder has since gone missing (see _rootMissing).</summary>
+    private bool NeedsFolder => _model.RootFolderPath is null || _rootMissing;
 
     /// <summary>Used only for the "Connect to {name}" drag hint (see ComputeDragHint) - every other
     /// cross-fence reference goes through FolderFenceId/FolderFenceManager instead. Mirrors
@@ -389,8 +404,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         _refreshTimer.Tick += (_, _) =>
         {
             _refreshTimer.Stop();
-            RefreshEntries();
-            RenderAndPresent();
+            Resync();
         };
 
         RefreshEntries();
@@ -549,7 +563,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         if (e.Data?.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } paths)
             return;
 
-        if (_model.RootFolderPath is null)
+        if (NeedsFolder)
         {
             if (paths.Length == 1 && Directory.Exists(paths[0]))
                 e.Effect = DragDropEffects.Link;
@@ -603,8 +617,9 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         if (e.Data?.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } paths)
             return;
 
-        // An empty fence adopts a single dropped folder as its root.
-        if (_model.RootFolderPath is null)
+        // An empty fence (or one whose folder has gone missing) adopts a single dropped folder as
+        // its root.
+        if (NeedsFolder)
         {
             if (paths.Length == 1 && Directory.Exists(paths[0]))
                 SetRootFolder(paths[0]);
@@ -654,7 +669,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             return;
         }
 
-        if (_model.RootFolderPath is null && EmptyStatePlusRect(contentSize).Contains(contentPoint))
+        if (NeedsFolder && EmptyStatePlusRect(contentSize).Contains(contentPoint))
         {
             _plusButtonArmed = true;
             return;
@@ -925,8 +940,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             _model.Name = string.IsNullOrEmpty(name) ? path : name;
         }
         _manager.Save();
-        RestartWatcher();
         RefreshEntries();
+        RestartWatcher();
         RenderAndPresent();
     }
 
@@ -937,8 +952,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         _model.RootFolderPath = null;
         _currentSubPath = null;
         _model.CurrentSubPath = null;
-        _watcher?.Dispose();
-        _watcher = null;
+        _rootMissing = false;
+        DisposeWatchers();
         _entries.Clear();
         _hoverIndex = -1;
         _manager.Save();
@@ -962,8 +977,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         _model.CurrentSubPath = _currentSubPath;
         _manager.Save();
         _scrollbar.Offset = 0;
-        RestartWatcher();
         RefreshEntries();
+        RestartWatcher();
         RenderAndPresent();
     }
 
@@ -976,8 +991,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         _model.CurrentSubPath = _currentSubPath;
         _manager.Save();
         _scrollbar.Offset = 0;
-        RestartWatcher();
         RefreshEntries();
+        RestartWatcher();
         RenderAndPresent();
     }
 
@@ -988,11 +1003,22 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     /// <summary>Rescans CurrentDirectory fresh off disk - folders first, then files, alphabetical
     /// within each (Explorer's own default ordering). Never throws: a folder that's become
     /// inaccessible or vanished out from under this fence just shows as empty rather than crashing
-    /// it, the same tolerant approach GetIcon below already takes for a single missing file.</summary>
+    /// it, the same tolerant approach GetIcon below already takes for a single missing file. Also
+    /// re-checks the root itself (see _rootMissing), and drops back to the root when only the
+    /// subfolder being browsed has gone.</summary>
     private void RefreshEntries()
     {
         _entries.Clear();
         _hoverIndex = -1;
+
+        _rootMissing = _model.RootFolderPath is not null && !Directory.Exists(_model.RootFolderPath);
+        if (!_rootMissing && _currentSubPath is not null && !Directory.Exists(CurrentDirectory))
+        {
+            _currentSubPath = null;
+            _model.CurrentSubPath = null;
+            _scrollbar.Offset = 0;
+            _manager.Save();
+        }
 
         var dir = CurrentDirectory;
         if (dir is null || !Directory.Exists(dir))
@@ -1014,30 +1040,195 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     /// (SetRootFolder, NavigateInto/Up) so the grid only ever watches whichever level is actually
     /// on screen right now, not the whole folder tree. A folder that can't be watched (permissions,
     /// or it vanished) just doesn't live-refresh; RefreshEntries' own try/catch above already keeps
-    /// the grid itself from crashing on the same problem.</summary>
+    /// the grid itself from crashing on the same problem. Also (re)creates _ancestorWatchers - see
+    /// AncestorsToWatch - so the folder on screen disappearing out from under it is noticed too.</summary>
     private void RestartWatcher()
     {
-        _watcher?.Dispose();
-        _watcher = null;
+        DisposeWatchers();
+        _watchersStale = false;
 
         var dir = CurrentDirectory;
-        if (dir is null || !Directory.Exists(dir))
-            return;
+        if (dir is not null && Directory.Exists(dir))
+        {
+            _watcher = TryCreateWatcher(dir, NotifyFilters.FileName | NotifyFilters.DirectoryName, OnWatcherChanged);
+            if (_watcher is not null)
+                _watcher.Error += OnWatcherError;
+        }
 
+        foreach (var ancestor in AncestorsToWatch())
+        {
+            if (TryCreateWatcher(ancestor, NotifyFilters.DirectoryName, OnAncestorChanged) is { } watcher)
+            {
+                watcher.Error += OnWatcherError;
+                _ancestorWatchers.Add(watcher);
+            }
+        }
+    }
+
+    private static FileSystemWatcher? TryCreateWatcher(string dir, NotifyFilters filter, FileSystemEventHandler handler)
+    {
         try
         {
             var watcher = new FileSystemWatcher(dir)
             {
                 IncludeSubdirectories = false,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName,
+                NotifyFilter = filter,
             };
-            watcher.Created += OnWatcherChanged;
-            watcher.Deleted += OnWatcherChanged;
-            watcher.Renamed += OnWatcherChanged;
+            watcher.Created += handler;
+            watcher.Deleted += handler;
+            watcher.Renamed += (s, e) => handler(s, e);
             watcher.EnableRaisingEvents = true;
-            _watcher = watcher;
+            return watcher;
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private void DisposeWatchers()
+    {
+        _watcher?.Dispose();
+        _watcher = null;
+        foreach (var watcher in _ancestorWatchers)
+            watcher.Dispose();
+        _ancestorWatchers.Clear();
+    }
+
+    /// <summary>Every folder whose own children include a step of the path to CurrentDirectory:
+    /// RootFolderPath's parent, the root itself, then each subfolder down to CurrentDirectory's
+    /// parent. Non-recursive watchers on just these stay cheap however big the tree around them is.
+    /// While the root is missing, just its nearest ancestor that still exists, so the folder
+    /// coming back (moved back, drive plugged in again) is noticed.</summary>
+    private IEnumerable<string> AncestorsToWatch()
+    {
+        if (_model.RootFolderPath is null)
+            yield break;
+        var root = Path.TrimEndingDirectorySeparator(_model.RootFolderPath);
+
+        if (_rootMissing)
+        {
+            var existing = Path.GetDirectoryName(root);
+            while (existing is not null && !Directory.Exists(existing))
+                existing = Path.GetDirectoryName(existing);
+            if (existing is not null)
+                yield return existing;
+            yield break;
+        }
+
+        if (Path.GetDirectoryName(root) is { } parent)
+            yield return parent;
+        if (_currentSubPath is null)
+            yield break;
+
+        yield return root;
+        var dir = root;
+        var steps = Path.GetDirectoryName(_currentSubPath);
+        if (string.IsNullOrEmpty(steps))
+            yield break;
+        foreach (var step in steps.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            dir = Path.Combine(dir, step);
+            yield return dir;
+        }
+    }
+
+    // Set when a watcher errored (buffer overflow, or its folder was deleted under it) or an ancestor
+    // changed, so the next Resync rebuilds the watchers even if CurrentDirectory itself didn't change.
+    private bool _watchersStale;
+
+    /// <summary>_refreshTimer's own tick - rescans, then rebuilds the watchers only if what they
+    /// should be watching changed (a subfolder vanished and RefreshEntries fell back to the root, the
+    /// root went missing or came back, or _watchersStale).</summary>
+    private void Resync()
+    {
+        var before = CurrentDirectory;
+        var wasMissing = _rootMissing;
+        RefreshEntries();
+        if (_watchersStale || wasMissing != _rootMissing
+            || !string.Equals(before, CurrentDirectory, StringComparison.OrdinalIgnoreCase))
+            RestartWatcher();
+        RenderAndPresent();
+    }
+
+    private void ScheduleRefresh()
+    {
+        _refreshTimer.Stop();
+        _refreshTimer.Start();
+    }
+
+    private void OnWatcherError(object sender, ErrorEventArgs e) =>
+        PostToUi(() =>
+        {
+            _watchersStale = true;
+            ScheduleRefresh();
+        });
+
+    /// <summary>A folder above the one on screen changed. A rename of the root or of a subfolder on
+    /// the way down to CurrentDirectory is followed in place (see FollowRename); anything else
+    /// touching that path (deleted, moved elsewhere, or coming back) just triggers a Resync, which
+    /// then shows the missing-folder state or falls back to the root as needed. Changes to unrelated
+    /// siblings are ignored.</summary>
+    private void OnAncestorChanged(object sender, FileSystemEventArgs e) =>
+        PostToUi(() =>
+        {
+            if (CurrentDirectory is not { } current)
+                return;
+            if (e is RenamedEventArgs renamed && !_rootMissing && IsSameOrUnder(current, renamed.OldFullPath))
+            {
+                FollowRename(renamed.OldFullPath, renamed.FullPath);
+                return;
+            }
+            if (IsSameOrUnder(current, e.FullPath))
+            {
+                _watchersStale = true;
+                ScheduleRefresh();
+            }
+        });
+
+    /// <summary>oldPath (the root, or a subfolder between it and CurrentDirectory) was renamed to
+    /// newPath within the same parent - repoints the fence at the new location rather than treating
+    /// it as gone. Leaves the fence's own name alone, same as "Change Folder" does.</summary>
+    private void FollowRename(string oldPath, string newPath)
+    {
+        var root = _model.RootFolderPath!;
+        if (IsSameOrUnder(root, oldPath))
+            _model.RootFolderPath = Rebase(root, oldPath, newPath);
+        else
+            _currentSubPath = Path.GetRelativePath(root, Rebase(CurrentDirectory!, oldPath, newPath));
+        _model.CurrentSubPath = _currentSubPath;
+        _manager.Save();
+
+        RefreshEntries();
+        RestartWatcher();
+        RenderAndPresent();
+    }
+
+    private static string Rebase(string path, string oldPrefix, string newPrefix)
+    {
+        var relative = Path.GetRelativePath(oldPrefix, path);
+        return relative == "." ? newPrefix : Path.Combine(newPrefix, relative);
+    }
+
+    /// <summary>Whether path is ancestor itself or somewhere inside it.</summary>
+    private static bool IsSameOrUnder(string path, string ancestor)
+    {
+        var p = Path.TrimEndingDirectorySeparator(path);
+        var a = Path.TrimEndingDirectorySeparator(ancestor);
+        return string.Equals(p, a, StringComparison.OrdinalIgnoreCase)
+            || p.StartsWith(a + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Watcher events fire on a threadpool thread, not the UI thread.</summary>
+    private void PostToUi(Action action)
+    {
+        if (IsDisposing)
+            return;
+        try
+        {
+            BeginInvoke(action);
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
         {
         }
     }
@@ -1045,22 +1236,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     /// <summary>Fires on a threadpool thread, not the UI thread - marshals back via BeginInvoke,
     /// debounced through _refreshTimer so a burst of filesystem activity (copying many files at
     /// once, say) coalesces into one refresh instead of flooding RenderAndPresent.</summary>
-    private void OnWatcherChanged(object sender, FileSystemEventArgs e)
-    {
-        if (IsDisposing)
-            return;
-        try
-        {
-            BeginInvoke(new Action(() =>
-            {
-                _refreshTimer.Stop();
-                _refreshTimer.Start();
-            }));
-        }
-        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
-        {
-        }
-    }
+    private void OnWatcherChanged(object sender, FileSystemEventArgs e) => PostToUi(ScheduleRefresh);
 
     private void OpenItem(string? path)
     {
@@ -1319,7 +1495,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     protected override void DisposeOwnedResources()
     {
-        _watcher?.Dispose();
+        DisposeWatchers();
         _refreshTimer.Dispose();
         _itemContextMenu?.Dispose();
         _dragGhost?.Dispose();
@@ -1414,7 +1590,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         if (_currentSubPath is not null && TitleVisible)
             PaintBackButton(g);
 
-        if (_model.RootFolderPath is null)
+        if (NeedsFolder)
             PaintEmptyState(g, contentWidth, contentHeight);
         else
             PaintItems(g, contentWidth, contentHeight);
@@ -1441,6 +1617,25 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             g.DrawLine(pen, cx, cy - half, cx, cy + half);
         }
         g.SmoothingMode = previousSmoothing;
+
+        // A fence whose folder has vanished says so under the "+", rather than looking like a
+        // freshly-created one - the header still shows its old name.
+        if (_rootMissing)
+        {
+            var noteTop = rect.Bottom + 6;
+            var noteRect = ToWindow(new Rectangle(GridPadding, 0, contentWidth - GridPadding * 2, 0));
+            noteRect.Y = noteTop;
+            noteRect.Height = ToWindow(new Point(0, contentHeight - GridPadding)).Y - noteTop;
+            if (noteRect.Height > 0)
+            {
+                var previousTextHint = g.TextRenderingHint;
+                g.TextRenderingHint = TextRenderingHint.AntiAlias;
+                using (var textBrush = new SolidBrush(Color.FromArgb(200, 245, 245, 245)))
+                using (var textFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Near, Trimming = StringTrimming.EllipsisPath, FormatFlags = StringFormatFlags.LineLimit })
+                    g.DrawString($"Folder not found:\n{_model.RootFolderPath}", Font, textBrush, noteRect, textFormat);
+                g.TextRenderingHint = previousTextHint;
+            }
+        }
     }
 
     private void PaintItems(Graphics g, int width, int height)
