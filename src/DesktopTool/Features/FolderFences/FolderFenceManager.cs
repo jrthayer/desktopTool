@@ -231,4 +231,70 @@ public sealed class FolderFenceManager : IDisposable
     }
 
     internal void Save() => _store.Save(_models);
+
+    /// <summary>Renames the real folder oldPath to newPath (same parent) on behalf of a folder fence
+    /// being renamed (see FolderFenceForm.Title). Every folder fence's watchers are paused for the
+    /// move, not just the renaming one's - Windows refuses to rename a folder while anything inside it
+    /// is open, and another fence browsed into a subfolder of it (or mirroring a folder inside it)
+    /// holds exactly that. Each fence then follows the rename if it was inside the renamed folder
+    /// and resumes watching. Returns why the rename failed, or null on success.</summary>
+    internal string? RenameFolder(string oldPath, string newPath)
+    {
+        foreach (var form in _forms.Values)
+            form.PauseWatchers();
+
+        var problem = MoveFolder(oldPath, newPath);
+
+        foreach (var form in _forms.Values)
+            form.ResumeAfterFolderRename(problem is null ? oldPath : null, newPath);
+        return problem;
+    }
+
+    private static string? MoveFolder(string oldPath, string newPath)
+    {
+        // A case-only change needs a hop through a temporary name to stick.
+        var caseOnly = string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase);
+        var temp = caseOnly
+            ? Path.Combine(Path.GetDirectoryName(oldPath)!, $"{Path.GetFileName(newPath)}.{Guid.NewGuid():N}.tmp")
+            : null;
+        try
+        {
+            if (temp is not null)
+            {
+                Directory.Move(oldPath, temp);
+                Directory.Move(temp, newPath);
+            }
+            else
+            {
+                Directory.Move(oldPath, newPath);
+            }
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            var problem = IsInUse(ex)
+                ? "Something inside the folder is open in another program (a file, a terminal, or an "
+                  + "app running from it). Close it and try again."
+                : ex.Message;
+            // Never leave the folder stranded under the temporary name.
+            if (temp is not null && Directory.Exists(temp))
+            {
+                try { Directory.Move(temp, oldPath); }
+                catch (Exception undo) when (undo is IOException or UnauthorizedAccessException)
+                {
+                    problem += $"\n\nIt was left named \"{Path.GetFileName(temp)}\".";
+                }
+            }
+            return problem;
+        }
+    }
+
+    /// <summary>Access denied / sharing violation - what Windows reports for a folder with something
+    /// open inside it, which is by far the usual reason a rename fails.</summary>
+    private static bool IsInUse(Exception ex)
+    {
+        const int AccessDenied = unchecked((int)0x80070005);
+        const int SharingViolation = unchecked((int)0x80070020);
+        return ex is UnauthorizedAccessException || ex.HResult is AccessDenied or SharingViolation;
+    }
 }

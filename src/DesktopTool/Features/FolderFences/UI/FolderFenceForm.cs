@@ -408,6 +408,10 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         };
 
         RefreshEntries();
+        // Brings a fence saved with a name of its own (from before names were synced - see Title),
+        // or whose folder was renamed while the app wasn't running, back in line with its folder.
+        if (_model.RootFolderPath is not null && !_rootMissing)
+            _model.Name = FolderDisplayName(_model.RootFolderPath);
         RestartWatcher();
         RenderAndPresent();
     }
@@ -925,24 +929,25 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             SetRootFolder(dialog.SelectedPath);
     }
 
-    /// <summary>Points this fence at path - only renames the widget after the folder's own name
-    /// the first time a root is assigned (from the empty "+" state); using "Change Folder" to
-    /// repoint an already-named fence later leaves whatever name it already has alone.</summary>
+    /// <summary>Points this fence at path and renames it after that folder - the fence name always
+    /// mirrors its folder's name (see Title).</summary>
     private void SetRootFolder(string path)
     {
-        var isFirstAssignment = _model.RootFolderPath is null;
         _model.RootFolderPath = path;
         _currentSubPath = null;
         _model.CurrentSubPath = null;
-        if (isFirstAssignment)
-        {
-            var name = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            _model.Name = string.IsNullOrEmpty(name) ? path : name;
-        }
+        _model.Name = FolderDisplayName(path);
         _manager.Save();
         RefreshEntries();
         RestartWatcher();
         RenderAndPresent();
+    }
+
+    /// <summary>The folder's own name, or the whole path for a drive root ("D:\"), which has none.</summary>
+    private static string FolderDisplayName(string path)
+    {
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+        return string.IsNullOrEmpty(name) ? path : name;
     }
 
     private void ClearFolder()
@@ -1188,12 +1193,15 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     /// <summary>oldPath (the root, or a subfolder between it and CurrentDirectory) was renamed to
     /// newPath within the same parent - repoints the fence at the new location rather than treating
-    /// it as gone. Leaves the fence's own name alone, same as "Change Folder" does.</summary>
+    /// it as gone. A rename of the root renames the fence to match (see Title).</summary>
     private void FollowRename(string oldPath, string newPath)
     {
         var root = _model.RootFolderPath!;
         if (IsSameOrUnder(root, oldPath))
+        {
             _model.RootFolderPath = Rebase(root, oldPath, newPath);
+            _model.Name = FolderDisplayName(_model.RootFolderPath);
+        }
         else
             _currentSubPath = Path.GetRelativePath(root, Rebase(CurrentDirectory!, oldPath, newPath));
         _model.CurrentSubPath = _currentSubPath;
@@ -1328,14 +1336,64 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         RenderAndPresent();
     }
 
+    /// <summary>The fence's name and its folder's name are kept in sync both ways: renaming the fence
+    /// renames the real folder too (see TryRenameRootFolder), and a rename made in Explorer renames the
+    /// fence (see FollowRename). Only a fence with no folder to rename (empty, missing, or a drive root)
+    /// renames just its own label. A folder rename that fails leaves both names as they were.</summary>
     protected override string Title
     {
         get => _model.Name;
         set
         {
+            if (_model.RootFolderPath is not null && !_rootMissing
+                && Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(_model.RootFolderPath)) is not null)
+            {
+                TryRenameRootFolder(value);
+                return;
+            }
             _model.Name = value;
             _manager.Save();
         }
+    }
+
+    private void TryRenameRootFolder(string newName)
+    {
+        var root = Path.TrimEndingDirectorySeparator(_model.RootFolderPath!);
+        var parent = Path.GetDirectoryName(root)!;
+        // Windows silently drops trailing dots/spaces from a folder name - trimmed here so the fence
+        // name matches what actually lands on disk.
+        newName = newName.TrimEnd('.', ' ');
+
+        string? problem = null;
+        if (newName.Length == 0 || newName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            problem = "A folder name can't contain any of these characters:\n\\ / : * ? \" < > |";
+        var newRoot = Path.Combine(parent, newName);
+        var caseOnly = string.Equals(newRoot, root, StringComparison.OrdinalIgnoreCase);
+        if (problem is null && !caseOnly && (Directory.Exists(newRoot) || File.Exists(newRoot)))
+            problem = $"There's already a file or folder named \"{newName}\" in\n{parent}";
+
+        // Success repoints and renames this fence (and any other inside the folder) via
+        // ResumeAfterFolderRename.
+        if (problem is null && !string.Equals(newRoot, root, StringComparison.Ordinal))
+            problem = _manager.RenameFolder(root, newRoot);
+
+        if (problem is not null)
+            MessageBox.Show(this, $"Couldn't rename the folder \"{Path.GetFileName(root)}\".\n\n{problem}",
+                "Rename Folder Fence", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+
+    /// <summary>See FolderFenceManager.RenameFolder - stops this fence holding anything open that
+    /// would block another fence's folder rename.</summary>
+    internal void PauseWatchers() => DisposeWatchers();
+
+    /// <summary>Counterpart to PauseWatchers. oldPath is null when the rename failed (nothing moved);
+    /// otherwise a fence showing anything inside it follows it to newPath.</summary>
+    internal void ResumeAfterFolderRename(string? oldPath, string newPath)
+    {
+        if (oldPath is not null && !_rootMissing && CurrentDirectory is { } current && IsSameOrUnder(current, oldPath))
+            FollowRename(oldPath, newPath);
+        else
+            RestartWatcher();
     }
 
     protected override int TitleRowHeight => TitleBarHeight;
