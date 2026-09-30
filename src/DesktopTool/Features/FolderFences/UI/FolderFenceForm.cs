@@ -526,19 +526,44 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     protected override void OnDragEnter(DragEventArgs e)
     {
-        if (_model.RootFolderPath is null && e.Data?.GetData(DataFormats.FileDrop) is string[] { Length: 1 } paths
-            && Directory.Exists(paths[0]))
-            e.Effect = DragDropEffects.Link;
+        if (e.Data?.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } paths)
+            return;
+
+        if (_model.RootFolderPath is null)
+        {
+            if (paths.Length == 1 && Directory.Exists(paths[0]))
+                e.Effect = DragDropEffects.Link;
+            return;
+        }
+
+        var dir = CurrentDirectory;
+        if (dir is not null && Directory.Exists(dir))
+            e.Effect = SameDrive(paths, dir) ? DragDropEffects.Move : DragDropEffects.Copy;
     }
+
+    private static bool SameDrive(string[] paths, string dir) =>
+        paths.All(p => string.Equals(Path.GetPathRoot(Path.GetFullPath(p)), Path.GetPathRoot(Path.GetFullPath(dir)),
+            StringComparison.OrdinalIgnoreCase));
 
     protected override void OnDragDrop(DragEventArgs e)
     {
-        // A populated folder fence doesn't accept dropped files - its contents are only ever
-        // whatever's really in the folder (see RefreshEntries), never something dragged in.
-        if (_model.RootFolderPath is not null)
+        if (e.Data?.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } paths)
             return;
-        if (e.Data?.GetData(DataFormats.FileDrop) is string[] { Length: 1 } paths && Directory.Exists(paths[0]))
-            SetRootFolder(paths[0]);
+
+        // An empty fence adopts a single dropped folder as its root.
+        if (_model.RootFolderPath is null)
+        {
+            if (paths.Length == 1 && Directory.Exists(paths[0]))
+                SetRootFolder(paths[0]);
+            return;
+        }
+
+        // A populated fence mirrors a real folder, so a drop moves (same drive) or copies
+        // (different drive) the files into whichever sub-folder is currently showing, like
+        // Explorer. The watcher then picks up the change and refreshes the grid.
+        var dir = CurrentDirectory;
+        if (dir is not null && Directory.Exists(dir))
+            FileTransferOperations.TransferInto(Handle, paths, dir);
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
