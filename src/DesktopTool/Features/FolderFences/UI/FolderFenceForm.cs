@@ -104,13 +104,15 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     // both write back to it, and the constructor seeds this field from it (once re-validated) rather
     // than always starting at the root the way this used to.
     private string? _currentSubPath;
+    // Watches the root (recursively while browsing a subfolder) - see RestartWatcher.
     private FileSystemWatcher? _watcher;
-    // One per folder above whatever's on screen, from RootFolderPath's own parent down to
-    // CurrentDirectory's parent (see RestartWatcher) - _watcher only ever sees its own folder's
-    // children, never the folder itself, so without these a rename/move/delete of the root (or of
-    // any subfolder between it and the level being browsed) went completely unnoticed and the grid
-    // kept showing stale entries pointing at paths that no longer existed.
-    private readonly List<FileSystemWatcher> _ancestorWatchers = new();
+    // Watches the root's parent - _watcher only ever sees the root's contents, never the root
+    // itself, so without this a rename/move/delete of the root went completely unnoticed and the
+    // grid kept showing stale entries pointing at paths that no longer existed.
+    private FileSystemWatcher? _parentWatcher;
+    // CurrentDirectory as of the last RestartWatcher - read by OnRootTreeChanged on a threadpool
+    // thread to filter events before marshalling anything to the UI thread.
+    private volatile string? _watchedDirectory;
 
     // RootFolderPath is set but that folder is gone (moved/deleted/drive unplugged) - shows the "+"
     // again with a "folder not found" note (see PaintEmptyState) so it can be re-pointed, rather than
@@ -1041,47 +1043,63 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         }
     }
 
-    /// <summary>(Re)points the live watcher at CurrentDirectory - called whenever it changes
-    /// (SetRootFolder, NavigateInto/Up) so the grid only ever watches whichever level is actually
-    /// on screen right now, not the whole folder tree. A folder that can't be watched (permissions,
-    /// or it vanished) just doesn't live-refresh; RefreshEntries' own try/catch above already keeps
-    /// the grid itself from crashing on the same problem. Also (re)creates _ancestorWatchers - see
-    /// AncestorsToWatch - so the folder on screen disappearing out from under it is noticed too.</summary>
+    /// <summary>(Re)builds the watchers for whatever's on screen - called whenever that changes
+    /// (SetRootFolder, NavigateInto/Up, and Resync when the folder vanishes or comes back). A folder
+    /// that can't be watched (permissions, or it vanished) just doesn't live-refresh; RefreshEntries'
+    /// own try/catch above already keeps the grid itself from crashing on the same problem.
+    ///
+    /// Never holds anything open INSIDE the root: Windows refuses to rename a folder while anything
+    /// under it is open, so a watcher on the subfolder being browsed would stop the root being renamed
+    /// in Explorer. Instead the root itself is watched - recursively while browsing a subfolder, with
+    /// OnRootTreeChanged filtering down to the level on screen and the folders leading to it - plus a
+    /// non-recursive watcher on the root's parent (see _parentWatcher) to notice the root itself
+    /// being renamed/moved/deleted, which no watcher on the root can see.</summary>
     private void RestartWatcher()
     {
         DisposeWatchers();
         _watchersStale = false;
+        _watchedDirectory = CurrentDirectory;
 
-        var dir = CurrentDirectory;
-        if (dir is not null && Directory.Exists(dir))
+        if (_model.RootFolderPath is null)
+            return;
+        var root = Path.TrimEndingDirectorySeparator(_model.RootFolderPath);
+
+        if (!_rootMissing)
         {
-            _watcher = TryCreateWatcher(dir, NotifyFilters.FileName | NotifyFilters.DirectoryName, OnWatcherChanged);
-            if (_watcher is not null)
-                _watcher.Error += OnWatcherError;
+            _watcher = TryCreateWatcher(root, NotifyFilters.FileName | NotifyFilters.DirectoryName,
+                recursive: _currentSubPath is not null, OnRootTreeChanged);
+            if (Path.GetDirectoryName(root) is { } parent)
+                _parentWatcher = TryCreateWatcher(parent, NotifyFilters.DirectoryName, recursive: false, OnAncestorChanged);
         }
-
-        foreach (var ancestor in AncestorsToWatch())
+        else
         {
-            if (TryCreateWatcher(ancestor, NotifyFilters.DirectoryName, OnAncestorChanged) is { } watcher)
-            {
-                watcher.Error += OnWatcherError;
-                _ancestorWatchers.Add(watcher);
-            }
+            // Just the nearest ancestor that still exists, so the folder coming back (moved back,
+            // drive plugged in again) is noticed.
+            var existing = Path.GetDirectoryName(root);
+            while (existing is not null && !Directory.Exists(existing))
+                existing = Path.GetDirectoryName(existing);
+            if (existing is not null)
+                _parentWatcher = TryCreateWatcher(existing, NotifyFilters.DirectoryName, recursive: false, OnAncestorChanged);
         }
     }
 
-    private static FileSystemWatcher? TryCreateWatcher(string dir, NotifyFilters filter, FileSystemEventHandler handler)
+    private FileSystemWatcher? TryCreateWatcher(string dir, NotifyFilters filter, bool recursive, FileSystemEventHandler handler)
     {
         try
         {
             var watcher = new FileSystemWatcher(dir)
             {
-                IncludeSubdirectories = false,
+                IncludeSubdirectories = recursive,
                 NotifyFilter = filter,
+                // A recursive watch over a busy tree (a build under the root, say) sees far more
+                // events than the level on screen - the max buffer makes an overflow (which still
+                // recovers via OnWatcherError's full rescan) much rarer.
+                InternalBufferSize = recursive ? 64 * 1024 : 8 * 1024,
             };
             watcher.Created += handler;
             watcher.Deleted += handler;
             watcher.Renamed += (s, e) => handler(s, e);
+            watcher.Error += OnWatcherError;
             watcher.EnableRaisingEvents = true;
             return watcher;
         }
@@ -1095,48 +1113,29 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     {
         _watcher?.Dispose();
         _watcher = null;
-        foreach (var watcher in _ancestorWatchers)
-            watcher.Dispose();
-        _ancestorWatchers.Clear();
+        _parentWatcher?.Dispose();
+        _parentWatcher = null;
     }
 
-    /// <summary>Every folder whose own children include a step of the path to CurrentDirectory:
-    /// RootFolderPath's parent, the root itself, then each subfolder down to CurrentDirectory's
-    /// parent. Non-recursive watchers on just these stay cheap however big the tree around them is.
-    /// While the root is missing, just its nearest ancestor that still exists, so the folder
-    /// coming back (moved back, drive plugged in again) is noticed.</summary>
-    private IEnumerable<string> AncestorsToWatch()
+    /// <summary>Anything under the root changed - runs on a threadpool thread, and for a recursive
+    /// watch over a busy tree most events are irrelevant, so they're filtered here before anything
+    /// is marshalled to the UI thread. A change directly inside the folder on screen refreshes the
+    /// grid; a change to one of the folders leading down to it is handled like an ancestor change
+    /// (see OnAncestorChanged); everything else is ignored.</summary>
+    private void OnRootTreeChanged(object sender, FileSystemEventArgs e)
     {
-        if (_model.RootFolderPath is null)
-            yield break;
-        var root = Path.TrimEndingDirectorySeparator(_model.RootFolderPath);
+        if (_watchedDirectory is not { } current)
+            return;
 
-        if (_rootMissing)
-        {
-            var existing = Path.GetDirectoryName(root);
-            while (existing is not null && !Directory.Exists(existing))
-                existing = Path.GetDirectoryName(existing);
-            if (existing is not null)
-                yield return existing;
-            yield break;
-        }
-
-        if (Path.GetDirectoryName(root) is { } parent)
-            yield return parent;
-        if (_currentSubPath is null)
-            yield break;
-
-        yield return root;
-        var dir = root;
-        var steps = Path.GetDirectoryName(_currentSubPath);
-        if (string.IsNullOrEmpty(steps))
-            yield break;
-        foreach (var step in steps.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries))
-        {
-            dir = Path.Combine(dir, step);
-            yield return dir;
-        }
+        var oldPath = (e as RenamedEventArgs)?.OldFullPath;
+        if (IsDirectlyInside(e.FullPath, current) || (oldPath is not null && IsDirectlyInside(oldPath, current)))
+            PostToUi(ScheduleRefresh);
+        else if (IsSameOrUnder(current, e.FullPath) || (oldPath is not null && IsSameOrUnder(current, oldPath)))
+            OnAncestorChanged(sender, e);
     }
+
+    private static bool IsDirectlyInside(string path, string dir) =>
+        string.Equals(Path.GetDirectoryName(path), Path.TrimEndingDirectorySeparator(dir), StringComparison.OrdinalIgnoreCase);
 
     // Set when a watcher errored (buffer overflow, or its folder was deleted under it) or an ancestor
     // changed, so the next Resync rebuilds the watchers even if CurrentDirectory itself didn't change.
@@ -1156,6 +1155,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         RenderAndPresent();
     }
 
+    /// <summary>Debounced through _refreshTimer so a burst of filesystem activity (copying many files
+    /// at once, say) coalesces into one refresh instead of flooding RenderAndPresent.</summary>
     private void ScheduleRefresh()
     {
         _refreshTimer.Stop();
@@ -1240,11 +1241,6 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         {
         }
     }
-
-    /// <summary>Fires on a threadpool thread, not the UI thread - marshals back via BeginInvoke,
-    /// debounced through _refreshTimer so a burst of filesystem activity (copying many files at
-    /// once, say) coalesces into one refresh instead of flooding RenderAndPresent.</summary>
-    private void OnWatcherChanged(object sender, FileSystemEventArgs e) => PostToUi(ScheduleRefresh);
 
     private void OpenItem(string? path)
     {
