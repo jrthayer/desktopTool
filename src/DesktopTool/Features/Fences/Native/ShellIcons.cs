@@ -1,5 +1,6 @@
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using DesktopTool.Features.Layouts.Native;
 
 namespace DesktopTool.Features.Fences.Native;
 
@@ -66,6 +67,14 @@ internal static class ShellIcons
     [DllImport("user32.dll")]
     private static extern bool DestroyIcon(IntPtr hIcon);
 
+    // Reads an icon straight out of its source file's resources (exe/dll/ico), scaled to the
+    // requested size - no system image list or icon cache involved. Returns S_OK (0) on success,
+    // S_FALSE (1) if the file has no icon at that index.
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SHDefExtractIcon(string pszIconFile, int iIndex, uint uFlags, out IntPtr phiconLarge, out IntPtr phiconSmall, uint nIconSize);
+
+    private const uint DirectIconSize = 256;
+
     /// <summary>
     /// Extracts a large (up to 256x256) shell icon for the given file/folder path. Returns null if
     /// the path is inaccessible or the shell can't produce one - callers should fall back to
@@ -73,6 +82,16 @@ internal static class ShellIcons
     /// </summary>
     public static Icon? ExtractLargeIcon(string path)
     {
+        // Tried first whenever the icon lives in a file we can read directly (an exe, or a .lnk
+        // whose icon/target is one): the system image list below goes through the per-user icon
+        // cache, and a bad entry there hands back the generic blank-page icon for an otherwise
+        // perfectly good exe - observed for Microsoft Edge on a freshly created Windows profile,
+        // where both Edge's .lnk and msedge.exe itself came back blank while reading msedge.exe's
+        // own icon resource worked fine. That result isn't null, so nothing downstream could tell
+        // it apart from a real icon and fall back on its own.
+        if (ExtractDirect(path) is { } direct)
+            return direct;
+
         var shfi = new SHFILEINFO();
         var size = (uint)Marshal.SizeOf<SHFILEINFO>();
         if (SHGetFileInfo(path, 0, ref shfi, size, SHGFI_SYSICONINDEX) == IntPtr.Zero)
@@ -116,6 +135,53 @@ internal static class ShellIcons
             CoTaskMemFree(pidl);
         }
     }
+
+    private static Icon? ExtractDirect(string path)
+    {
+        if (ResolveIconSource(path) is not var (file, index))
+            return null;
+
+        if (SHDefExtractIcon(file, index, 0, out var large, out var small, DirectIconSize) != 0 || large == IntPtr.Zero)
+            return null;
+
+        try
+        {
+            // Same ownership dance as GetIcon below - Clone() so the native handle can go.
+            using var temp = Icon.FromHandle(large);
+            return (Icon)temp.Clone();
+        }
+        finally
+        {
+            DestroyIcon(large);
+            if (small != IntPtr.Zero)
+                DestroyIcon(small);
+        }
+    }
+
+    /// <summary>The file (and icon index) path's icon is actually stored in, when that's something
+    /// SHDefExtractIcon can read directly - null for everything else (documents, folders, .url
+    /// shortcuts, shell-namespace/UWP links), which only the shell itself knows how to resolve. A
+    /// .lnk's own explicit icon location wins over its target, so a shortcut with a custom icon
+    /// still shows that rather than its target exe's.</summary>
+    private static (string File, int Index)? ResolveIconSource(string path)
+    {
+        var extension = Path.GetExtension(path);
+        if (extension.Equals(".exe", StringComparison.OrdinalIgnoreCase))
+            return File.Exists(path) ? (path, 0) : null;
+
+        if (!extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase) || ShortcutResolver.Resolve(path) is not { } info)
+            return null;
+
+        if (info.IconPath is { } iconPath)
+            return IsDirectIconFile(iconPath) && File.Exists(iconPath) ? (iconPath, info.IconIndex) : null;
+
+        return info.Target is { } target && target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && File.Exists(target)
+            ? (target, 0)
+            : null;
+    }
+
+    private static bool IsDirectIconFile(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() is ".exe" or ".dll" or ".ico";
 
     private static Icon? GetIcon(int iIcon, int shilList, bool requireFullBleed)
     {

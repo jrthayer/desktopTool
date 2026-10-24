@@ -13,7 +13,7 @@ namespace DesktopTool.Features.Layouts.Native;
 /// targets RiotClientServices.exe and names the game only in --launch-product (see GameLauncherProbe).
 ///
 /// The interface below declares every vtable slot up to and including the last method actually
-/// called (GetArguments) - COM dispatch is purely positional, so a method after the ones you call
+/// called (GetIconLocation) - COM dispatch is purely positional, so a method after the ones you call
 /// doesn't need declaring, but every one before them does, even unused.
 /// </summary>
 internal static class ShortcutResolver
@@ -37,6 +37,12 @@ internal static class ShortcutResolver
         void GetWorkingDirectory(StringBuilder pszDir, int cchMaxPath);
         void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
         void GetArguments(StringBuilder pszArgs, int cchMaxPath);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+        void GetHotkey(out ushort pwHotkey);
+        void SetHotkey(ushort wHotkey);
+        void GetShowCmd(out int piShowCmd);
+        void SetShowCmd(int iShowCmd);
+        void GetIconLocation(StringBuilder pszIconPath, int cchIconPath, out int piIcon);
     }
 
     [ComImport]
@@ -54,8 +60,10 @@ internal static class ShortcutResolver
 
     /// <summary>A shortcut's resolved target and its command-line arguments. Target is null when the
     /// shortcut has no filesystem-path target (a shell-namespace or UWP-app link); Arguments is
-    /// never null, just possibly empty.</summary>
-    public sealed record ShortcutInfo(string? Target, string Arguments);
+    /// never null, just possibly empty. IconPath is the shortcut's own explicit icon file (with
+    /// environment variables already expanded), or null when it just uses its target's icon;
+    /// IconIndex follows the usual icon-location convention (negative = resource ID).</summary>
+    public sealed record ShortcutInfo(string? Target, string Arguments, string? IconPath = null, int IconIndex = 0);
 
     /// <summary>Null if lnkPath isn't a real/readable shortcut - callers fall back to the
     /// shortcut's own path in that case (see WindowPlacer.ResolveExeName).</summary>
@@ -76,7 +84,13 @@ internal static class ShortcutResolver
             var argsBuffer = new StringBuilder(1024);
             link.GetArguments(argsBuffer, argsBuffer.Capacity);
 
-            return new ShortcutInfo(string.IsNullOrEmpty(target) ? null : target, argsBuffer.ToString());
+            var iconBuffer = new StringBuilder(260);
+            link.GetIconLocation(iconBuffer, iconBuffer.Capacity, out var iconIndex);
+            var iconPath = Environment.ExpandEnvironmentVariables(iconBuffer.ToString());
+
+            return new ShortcutInfo(
+                string.IsNullOrEmpty(target) ? null : target, argsBuffer.ToString(),
+                string.IsNullOrEmpty(iconPath) ? null : iconPath, iconIndex);
         }
         catch (COMException)
         {
