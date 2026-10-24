@@ -200,6 +200,8 @@ public sealed class FenceManager : IDisposable
 
         var added = false;
         var stillVisible = new List<string>();
+        var publicDesktopBlocked = new List<string>();
+        var publicDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
         foreach (var path in filePaths)
         {
             if (model.Files.Any(f => f.Path == path) || (!File.Exists(path) && !Directory.Exists(path)))
@@ -207,9 +209,29 @@ public sealed class FenceManager : IDisposable
             var item = new FenceItem { Path = path };
             model.Files.Add(item);
             if (!_iconHider.Hide(item))
-                stillVisible.Add(Path.GetFileName(path));
+            {
+                // The Public Desktop only grants ordinary users read access by default, so a
+                // standard (non-admin) account can't move anything out of it - that's a fixed
+                // permission problem rather than a transient lock, so it gets its own message
+                // with the one-time fix instead of the generic "in use" one.
+                var inPublicDesktop = string.Equals(
+                    Path.GetDirectoryName(path)?.TrimEnd('\\'), publicDesktop.TrimEnd('\\'),
+                    StringComparison.OrdinalIgnoreCase);
+                (inPublicDesktop ? publicDesktopBlocked : stillVisible).Add(Path.GetFileName(path));
+            }
             added = true;
         }
+
+        if (publicDesktopBlocked.Count > 0)
+            MessageBox.Show(
+                $"Added, but couldn't hide the real desktop icon for: {string.Join(", ", publicDesktopBlocked)}. " +
+                "It lives on the shared Public Desktop, which your Windows account doesn't have " +
+                "permission to move files out of, so it'll still show up doubled.\n\n" +
+                "To fix it, run this once from an Administrator terminal, then remove and re-add " +
+                "the shortcut:\n\n" +
+                $"icacls \"{publicDesktop}\" /grant \"{Environment.UserName}:(OI)(CI)(IO)(DE,DC)\"\n\n" +
+                "(Ctrl+C copies this message.)",
+                "Fence Tool", MessageBoxButtons.OK, MessageBoxIcon.Warning);
 
         if (stillVisible.Count > 0)
             MessageBox.Show(
