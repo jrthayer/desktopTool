@@ -42,8 +42,7 @@ internal sealed class ReadmeModel : WidgetStyleModel
 /// see WidgetManagerWidget.HelpRequested/TrayApplicationContext.OpenReadme - with its own hardcoded
 /// Fences/Layout Launcher/Snap Lines/Widget Snapping/Fence Trash Can entries, still the parameterless
 /// constructor's default via DefaultEntries below), now reusable for any other (title, entries) pair
-/// with the identical list/detail mechanics - see ClaudePipelineWidget's own feature-info window for
-/// the second use. Built on LayeredWidgetForm like every other on-screen widget, so it drags/resizes/
+/// with the identical list/detail mechanics. Built on LayeredWidgetForm like every other on-screen widget, so it drags/resizes/
 /// themes/closes the exact same way rather than being a plain modal dialog - but genuinely ephemeral,
 /// unlike Fences/Layout Launcher/Widget Manager: created fresh each time, fully disposed on close (its
 /// own header close button - see ReadmeModel's own HeaderCloseButton default - is a real Close(), not
@@ -148,31 +147,6 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         Font = AppTheme.Font;
 
         // Forces handle creation now that every field CreateParams needs is set.
-        RenderAndPresent();
-    }
-
-    /// <summary>Lets a caller whose own source data can change while this window is open (a
-    /// ClaudePipelineManager.FeaturesChanged, say) push the new list in - a no-op for the original
-    /// Readme content, which never changes. Re-clamps the current selection instead of resetting it
-    /// to 0, so editing/toggling some other entry doesn't bounce the view away from the one still
-    /// being read.</summary>
-    public void RefreshEntries(IReadOnlyList<(string Title, string Body)> entries)
-    {
-        _entries = entries;
-        if (_selectedIndex >= _entries.Count)
-            _selectedIndex = Math.Max(0, _entries.Count - 1);
-        RenderAndPresent();
-    }
-
-    /// <summary>Jumps an already-open window to a specific entry - same "activate an existing instance
-    /// instead of opening a second copy" idea as LayoutEditorForm.SelectProfileById/ClaudePipelineEditorForm.
-    /// SelectFeatureById, just by index (this class has no notion of a stable Id of its own) rather than
-    /// a Guid.</summary>
-    public void SelectEntry(int index)
-    {
-        if (index < 0 || index >= _entries.Count || index == _selectedIndex)
-            return;
-        _selectedIndex = index;
         RenderAndPresent();
     }
 

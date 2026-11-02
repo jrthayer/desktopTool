@@ -2,8 +2,7 @@ using System.Drawing.Drawing2D;
 
 namespace DesktopTool.UI;
 
-/// <summary>Hand-drawn circled "i" info icon, shared by Claude Toolbox's row info icon and Widget
-/// Manager's header help button - same "no icon asset library, just draw the shape" approach as
+/// <summary>Hand-drawn circled "i" info icon, drawn by Widget Manager's header help button - same "no icon asset library, just draw the shape" approach as
 /// WarningIcon (see its own class comment).</summary>
 internal static class InfoIcon
 {

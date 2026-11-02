@@ -1,7 +1,5 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
-using DesktopTool.Features.ClaudePipeline.UI;
-using DesktopTool.Features.GetShitDone.UI;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.FolderFences;
 using DesktopTool.Features.Layouts.UI;
@@ -14,7 +12,7 @@ namespace DesktopTool.Features.WidgetManager.UI;
 /// "Widget Manager" widget - a third, independent proof that LayeredWidgetForm's own chrome
 /// (move/resize/snap/rename/settings/theme/list) works for something that isn't a Fence or the
 /// Layout Launcher. Lists the app's toggleable widgets/switches - Fences, Layout Launcher, Snap
-/// Lines, Widget Snapping, Fence Trash Can, Claude Toolbox, Get Shit Done - each as a fixed row (never added to/removed from,
+/// Lines, Widget Snapping, Fence Trash Can - each as a fixed row (never added to/removed from,
 /// unlike Layout Launcher's own saved-profile list) with an on/off switch and, for the three that
 /// have somewhere to go, a row-specific action button, so all of them can be reached without
 /// opening the tray menu. Everything not genuinely specific to this widget (theme derivation, the
@@ -31,7 +29,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private const int ButtonBandOverhang = 19;
     private const int TopMarginWithButtons = OuterMarginPx + ButtonBandOverhang;
 
-    private const int RowCountFixed = 7;
+    private const int RowCountFixed = 5;
     private const int ListVerticalPadding = 8;
     private const int ListHorizontalPadding = 10;
 
@@ -44,8 +42,6 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private const int ListRowHeightConst = 30;
 
     private readonly LayoutLauncherWidget _layoutLauncher;
-    private readonly ClaudePipelineWidget _claudePipeline;
-    private readonly GetShitDoneWidget _getShitDone;
     private readonly FolderFenceManager _folderFences;
     private readonly WidgetManagerModel _model;
     private readonly WidgetManagerStore _store;
@@ -73,8 +69,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         string Label, string ButtonTooltip, RowButtonIcon ButtonIcon,
         RowButtonIcon SecondButtonIcon = RowButtonIcon.None, string SecondButtonTooltip = "");
 
-    // Get Shit Done last - IsRowOn/ToggleRow/FireRowButtonAction's own index switches below must
-    // stay in this same order.
+    // IsRowOn/ToggleRow/FireRowButtonAction's own index switches below must stay in this same order.
     private static readonly WidgetRow[] Rows =
     {
         new("Fences", "Add Fence", RowButtonIcon.Plus, RowButtonIcon.Folder, "Add Folder Fence"),
@@ -82,8 +77,6 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         new("Snap Lines", "Edit Snap Lines", RowButtonIcon.Cog),
         new("Widget Snapping", string.Empty, RowButtonIcon.None),
         new("Fence Trash Can", string.Empty, RowButtonIcon.None),
-        new("Claude Toolbox", "Manage Features", RowButtonIcon.Cog),
-        new("Get Shit Done", string.Empty, RowButtonIcon.None),
     };
 
     // Row click handling - clicking a row's own switch flips that widget's on/off state; its
@@ -113,11 +106,6 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// this widget needing a LayoutManager/LayoutEditorForm reference of its own.</summary>
     public event EventHandler? EditLayoutsRequested;
 
-    /// <summary>Fired when the Claude Pipeline row's "Manage Features" button is clicked - lets
-    /// TrayApplicationContext open the same Manage Features editor its own tray item does, without
-    /// this widget needing a ClaudePipelineManager/ClaudePipelineEditorForm reference of its own.</summary>
-    public event EventHandler? EditFeaturesRequested;
-
     /// <summary>Fired when the "?" button is clicked - lets TrayApplicationContext open (or
     /// re-activate) the Readme window the same "create once, reuse" way as OpenLayoutEditor, without
     /// this widget needing a ReadmeForm reference of its own.</summary>
@@ -132,22 +120,18 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// rows read from - WidgetManagerModel already implements IWidgetStyle.</summary>
     protected override IWidgetStyle Style => _model;
 
-    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, ClaudePipelineWidget claudePipeline, GetShitDoneWidget getShitDone, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
+    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
         : base(model.Opacity / 100f, fenceManager)
     {
         _layoutLauncher = layoutLauncher;
-        _claudePipeline = claudePipeline;
-        _getShitDone = getShitDone;
         _folderFences = folderFences;
         _model = model;
         _store = store;
 
-        // Keeps the Layout Launcher/Claude Pipeline rows' own switches from going stale whenever
-        // Visible changes via some path other than this widget's own row click (ToggleRow already
-        // repaints itself right there) - see LayoutLauncherWidget.VisibilityChanged's own doc comment.
+        // Keeps the Layout Launcher row's own switch from going stale whenever Visible changes via
+        // some path other than this widget's own row click (ToggleRow already repaints itself right
+        // there) - see LayoutLauncherWidget.VisibilityChanged's own doc comment.
         _layoutLauncher.VisibilityChanged += (_, _) => RefreshRowStates();
-        _claudePipeline.VisibilityChanged += (_, _) => RefreshRowStates();
-        _getShitDone.VisibilityChanged += (_, _) => RefreshRowStates();
 
         ExtraButtons = new List<ChromeButton>
         {
@@ -700,8 +684,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// folder fence visible (see FenceManager.AnyVisible/FolderFenceManager.AnyVisible - a folder
     /// fence is conceptually a kind of fence, so the two show/hide together under this one switch);
     /// Layout Launcher: the widget's own Visible; Snap Lines: SnapLineManager.Enabled; Widget
-    /// Snapping: SnapLineManager.WidgetEdgesEnabled; Fence Trash Can: FenceManager.HasRecycleBin;
-    /// Claude Pipeline/Get Shit Done: the widget's own Visible. Same row order as Rows above.</summary>
+    /// Snapping: SnapLineManager.WidgetEdgesEnabled; Fence Trash Can: FenceManager.HasRecycleBin.
+    /// Same row order as Rows above.</summary>
     private bool IsRowOn(int index) => index switch
     {
         0 => Fences.AnyVisible || _folderFences.AnyVisible,
@@ -709,8 +693,6 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         2 => Fences.SnapLines.Enabled,
         3 => Fences.SnapLines.WidgetEdgesEnabled,
         4 => Fences.HasRecycleBin,
-        5 => _claudePipeline.Visible,
-        6 => _getShitDone.Visible,
         _ => false,
     };
 
@@ -729,8 +711,6 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case 4:
                 if (Fences.HasRecycleBin) Fences.RemoveRecycleBin(); else Fences.AddRecycleBin();
                 break;
-            case 5: _claudePipeline.ToggleVisible(); break;
-            case 6: _getShitDone.ToggleVisible(); break;
         }
     }
 
@@ -741,9 +721,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case 0: Fences.CreateFence(); break;
             case 1: EditLayoutsRequested?.Invoke(this, EventArgs.Empty); break;
             case 2: Fences.SnapLines.EnterEditMode(); break;
-            // 3 (Widget Snapping), 4 (Fence Trash Can) and 6 (Get Shit Done) have no action button - RowButtonIcon.
-            // None, never hit-testable.
-            case 5: EditFeaturesRequested?.Invoke(this, EventArgs.Empty); break;
+            // 3 (Widget Snapping) and 4 (Fence Trash Can) have no action button - RowButtonIcon.None,
+            // never hit-testable.
         }
     }
 
@@ -1042,7 +1021,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     // just the icon itself sits a little smaller and centered within it.
     private const int InfoIconInset = 3;
 
-    /// <summary>Circled "i" (see InfoIcon, shared with Claude Toolbox's own row info icon) rather than
+    /// <summary>Circled "i" (see InfoIcon) rather than
     /// the header close button's own plain "×" text-glyph treatment - a bare "i" character read as a
     /// stray letter sitting in the header instead of a button.</summary>
     private void PaintHeaderHelpButton(Graphics g, int contentWidth)
