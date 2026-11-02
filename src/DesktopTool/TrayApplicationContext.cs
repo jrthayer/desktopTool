@@ -165,7 +165,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void OnToggleStartup(object? sender, EventArgs e) =>
         StartupManager.SetEnabled(((ToolStripMenuItem)sender!).Checked);
 
-    // Doesn't force the desktop to visually pick this up - see README's Tray menu limitations.
+    // Also refreshes the desktop and open Explorer windows so the change shows straight away - see
+    // HiddenFilesManager.SetEnabled.
     private void OnToggleHiddenFiles(object? sender, EventArgs e) =>
         HiddenFilesManager.SetEnabled(((ToolStripMenuItem)sender!).Checked);
 

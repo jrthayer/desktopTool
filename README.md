@@ -142,17 +142,18 @@ All of its code lives under [`src/DesktopTool/UI`](src/DesktopTool/UI).
   new, dedicated fence. Hidden once one already exists anywhere, since only
   one is allowed.
 
-**Limitations:** the Show Hidden Files setting itself takes effect
-immediately, but the desktop's own icon view doesn't visibly pick it up
-until manually refreshed (F5, or right-click > Refresh) - a real Refresh
-forces Explorer to re-check which items currently match the filter, which
-nothing else tried does. Several alternatives were tried and none worked:
-the standard `SHChangeNotify` broadcast Explorer's own Folder Options
-dialog sends (refreshes ordinary Explorer windows, not the desktop), the
-same plus a forced repaint of the icon list, targeted `SHCNE_UPDATEDIR`
-notifications at both real desktop folders, simulating an actual F5
-keypress (requires genuine keyboard focus, which proved unreliable to
-fake from another process), and posting `WM_COMMAND`/`FCIDM_SHVIEW_REFRESH`
-directly (the same message the desktop's own right-click Refresh sends).
+Toggling **Show Hidden Files** takes effect on screen straight away: hidden
+items appear or disappear on the desktop and in every already-open File
+Explorer window, with no F5 needed. Writing the registry value alone
+changes the setting without updating what's on screen, so the toggle also
+uses the shell's own `SHGetSetSettings` call and the `WM_SETTINGCHANGE
+"ShellState"` broadcast that Folder Options sends, then refreshes each open
+Explorer window and the desktop's icon view (see `HiddenFilesManager`).
+Earlier attempts that sent only `SHChangeNotify`, forced a repaint, or
+posted the desktop's Refresh command on their own didn't work, because
+Explorer was still using the old setting when it redrew.
+
+**Limitations:** folder fences don't follow this setting; they always list
+hidden files.
 The setting is correct immediately either way - only the visual update is
 delayed.

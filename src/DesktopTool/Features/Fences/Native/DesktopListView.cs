@@ -92,22 +92,7 @@ public sealed class DesktopListView : IDisposable
     /// </summary>
     private bool Discover()
     {
-        var hProgman = NativeMethods.FindWindow("Progman", null);
-        if (hProgman == IntPtr.Zero)
-            return false;
-
-        // Nudges Explorer to create the icon-hosting WorkerW if it hasn't already.
-        NativeMethods.SendMessageTimeout(hProgman, NativeMethods.WM_SPAWN_WORKER, IntPtr.Zero, IntPtr.Zero,
-            NativeMethods.SMTO_ABORTIFHUNG, 1000, out _);
-
-        var hDefView = NativeMethods.FindWindowEx(hProgman, IntPtr.Zero, "SHELLDLL_DefView", null);
-        var anchor = hProgman;
-
-        if (hDefView == IntPtr.Zero)
-        {
-            (anchor, hDefView) = FindDefViewUnderWorkerW();
-        }
-
+        var (anchor, hDefView) = FindDesktopDefView();
         if (hDefView == IntPtr.Zero)
             return false;
 
@@ -137,6 +122,24 @@ public sealed class DesktopListView : IDisposable
 
         NativeMethods.SendMessage(_hListView, NativeMethods.LVM_SETEXTENDEDLISTVIEWSTYLE,
             (IntPtr)(NativeMethods.LVS_EX_SNAPTOGRID | NativeMethods.LVS_EX_AUTOAUTOARRANGE), IntPtr.Zero);
+    }
+
+    /// <summary>The desktop's SHELLDLL_DefView (the shell view hosting the icons) and the window that
+    /// directly parents it - Progman on Windows 11 24H2+, or the icon-hosting WorkerW before that.
+    /// Both zero if Explorer isn't running. Static so code that only needs to message the desktop's
+    /// view (HiddenFilesManager's refresh, say) can find it without a DesktopListView of its own.</summary>
+    internal static (IntPtr Anchor, IntPtr DefView) FindDesktopDefView()
+    {
+        var hProgman = NativeMethods.FindWindow("Progman", null);
+        if (hProgman == IntPtr.Zero)
+            return (IntPtr.Zero, IntPtr.Zero);
+
+        // Nudges Explorer to create the icon-hosting WorkerW if it hasn't already.
+        NativeMethods.SendMessageTimeout(hProgman, NativeMethods.WM_SPAWN_WORKER, IntPtr.Zero, IntPtr.Zero,
+            NativeMethods.SMTO_ABORTIFHUNG, 1000, out _);
+
+        var hDefView = NativeMethods.FindWindowEx(hProgman, IntPtr.Zero, "SHELLDLL_DefView", null);
+        return hDefView != IntPtr.Zero ? (hProgman, hDefView) : FindDefViewUnderWorkerW();
     }
 
     private static (IntPtr anchor, IntPtr defView) FindDefViewUnderWorkerW()
