@@ -1755,9 +1755,9 @@ internal abstract class LayeredWidgetForm : Form
     /// SnapMove/SnapResize. This widget's own SnapMargin (not each candidate's own) applies, like a
     /// CSS margin: every other widget's edge also contributes a second candidate offset outward by
     /// that amount alongside the flush one - SnapEngine's own nearest-candidate-wins logic picks
-    /// whichever of the two is actually closest. Not filtered by Visible - a hidden widget ("Show/Hide
-    /// All") is still a valid snap target the same way FenceForm's own predecessor of this method
-    /// never bothered filtering for that either. GetSnapTargetBody() is read fresh per candidate (not
+    /// whichever of the two is actually closest. A hidden widget ("Show/Hide All", or turned off in
+    /// Widget Manager) is skipped - checked via IsWindowVisible on the raw handle rather than WinForms'
+    /// Visible, since fences hide through ShowWindow(SW_HIDE) directly. GetSnapTargetBody() is read fresh per candidate (not
     /// cached anywhere) so a widget still mid-drag itself contributes its own latest position. Empty
     /// outright when Widget Manager's own Widget Snapping switch is off (Fences.SnapLines.
     /// WidgetEdgesEnabled) - the sole gate, so every caller (ComputeMovedBody/ComputeResizedBody/
@@ -1773,7 +1773,7 @@ internal abstract class LayeredWidgetForm : Form
 
         foreach (var widget in _liveWidgets)
         {
-            if (ReferenceEquals(widget, this))
+            if (ReferenceEquals(widget, this) || !widget.IsHandleCreated || !NativeMethods.IsWindowVisible(widget.Handle))
                 continue;
 
             var bounds = widget.GetSnapTargetBody();
