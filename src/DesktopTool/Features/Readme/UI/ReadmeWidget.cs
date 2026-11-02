@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing.Text;
 using DesktopTool.Features.Fences;
 using DesktopTool.Native;
@@ -71,7 +73,8 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
     // row count does, so this is just a reasonable starting size instead. Resizable afterward like
     // any other widget on this base.
     private const int DefaultContentWidth = 480;
-    private const int DefaultContentHeight = 280;
+    // Tall enough for the longest entry's text plus the View on GitHub button beneath it.
+    private const int DefaultContentHeight = 330;
 
     // Same order as WidgetManagerWidget.Rows - this list exists to be read alongside that one. Only
     // ever used by the parameterless constructor's default - see DefaultEntries below.
@@ -81,6 +84,13 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
             "Draggable, resizable containers for your desktop icons - drag files onto one to fence " +
             "them instead of leaving them scattered on the desktop. Widget Manager's own switch " +
             "shows or hides every fence at once; its + button adds a new, empty fence."),
+        new("Folder Fences",
+            "A fence that shows the live contents of one real folder on disk, instead of a list of " +
+            "shortcuts you've added. Click its + (or drop a folder onto it) to choose the folder; " +
+            "click a subfolder to browse into it, and use the back button in the header to go back " +
+            "up. Items drag out as real files, just like from Explorer. Widget Manager's folder " +
+            "button on the Fences row adds a new one, and the Fences switch shows or hides them " +
+            "along with ordinary fences."),
         new("Layout Launcher",
             "Saved sets of programs and windows, each pinned to a monitor and screen position, " +
             "launched together with one click. Widget Manager's own switch shows or hides the " +
@@ -108,6 +118,25 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
             "Manager's own switch shows or hides the widget."),
     };
 
+    private const string GitHubFeaturesUrl = "https://github.com/jrthayer/desktopTool/blob/master/src/DesktopTool/Features/";
+
+    // Each entry's full write-up on GitHub, by entry title - shown as a "View on GitHub" button
+    // under that entry's text (see GetContentButtons). An entry with no README of its own (Folder
+    // Fences, so far) simply has no button.
+    private static readonly Dictionary<string, string> GitHubLinks = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Fences"] = GitHubFeaturesUrl + "Fences/README.md",
+        ["Layout Launcher"] = GitHubFeaturesUrl + "Layouts/README.md",
+        ["Snap Lines"] = GitHubFeaturesUrl + "Fences/README.md#snap-lines",
+        ["Widget Snapping"] = GitHubFeaturesUrl + "Snapping/README.md",
+        ["Fence Trash Can"] = GitHubFeaturesUrl + "Fences/README.md#recycle-bin",
+        ["Wallpapers"] = GitHubFeaturesUrl + "Wallpapers/README.md",
+    };
+
+    private const int GitHubButtonWidth = 120;
+    private const int GitHubButtonHeight = 24;
+    private const int GitHubButtonGap = 8;
+
     private readonly ReadmeModel _model;
     private readonly Font _detailTitleFont;
     // One point larger than AppTheme.Font - AA softness is a roughly fixed pixel width at the glyph
@@ -130,6 +159,29 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
     /// <summary>The original Readme, unchanged - DefaultEntries/"Readme" via the parameterized
     /// constructor below.</summary>
     public ReadmeWidget(FenceManager fenceManager) : this(fenceManager, "Readme", DefaultEntries, 0) { }
+
+    /// <summary>The original Readme, opened on the entry titled entryTitle (a widget's own Help
+    /// button - see LayeredWidgetForm.HelpEntry) - the first entry if no title matches.</summary>
+    public ReadmeWidget(FenceManager fenceManager, string entryTitle)
+        : this(fenceManager, "Readme", DefaultEntries, Math.Max(0, IndexOfEntry(DefaultEntries, entryTitle))) { }
+
+    /// <summary>Jumps an already-open window to the entry titled entryTitle - a no-op if none matches.</summary>
+    public void SelectEntry(string entryTitle)
+    {
+        var index = IndexOfEntry(_entries, entryTitle);
+        if (index < 0 || index == _selectedIndex)
+            return;
+        _selectedIndex = index;
+        RenderAndPresent();
+    }
+
+    private static int IndexOfEntry(IReadOnlyList<(string Title, string Body)> entries, string title)
+    {
+        for (var i = 0; i < entries.Count; i++)
+            if (string.Equals(entries[i].Title, title, StringComparison.OrdinalIgnoreCase))
+                return i;
+        return -1;
+    }
 
     // 1f (full opacity), matching ReadmeModel's own Opacity default - not read from _model itself,
     // which can't be read yet this early (see CreateParams' own "Control's base constructor probes
@@ -266,6 +318,8 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         }
         if (ShowsButtons && TryArmExtraButton(contentPoint))
             return;
+        if (TryArmContentButton(contentPoint))
+            return;
         if (TryHandleListMouseDown(contentPoint))
             return;
 
@@ -306,6 +360,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         }
 
         FireArmedExtraButton(contentPoint);
+        FireArmedContentButton(contentPoint);
         EndListScrollDrag();
 
         if (_armedRowIndex is int armedIndex)
@@ -446,11 +501,46 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         using (var titleBrush = new SolidBrush(Color.WhiteSmoke))
             g.DrawString(entry.Title, _detailTitleFont, titleBrush, titleRect);
 
-        var bodyRect = new Rectangle(windowRect.X, windowRect.Y + DetailTitleHeight, windowRect.Width, windowRect.Height - DetailTitleHeight);
+        // Stops above the View on GitHub button when there is one, so long text never runs under it.
+        var reserved = SelectedGitHubLink is null ? 0 : GitHubButtonHeight + GitHubButtonGap;
+        var bodyRect = new Rectangle(windowRect.X, windowRect.Y + DetailTitleHeight, windowRect.Width,
+            Math.Max(0, windowRect.Height - DetailTitleHeight - reserved));
         using (var bodyBrush = new SolidBrush(Color.WhiteSmoke))
             g.DrawString(entry.Body, _detailBodyFont, bodyBrush, bodyRect);
 
         g.TextRenderingHint = previousTextHint;
+    }
+
+    private string? SelectedGitHubLink =>
+        _entries.Count > 0 && GitHubLinks.TryGetValue(_entries[_selectedIndex].Title, out var url) ? url : null;
+
+    /// <summary>"View on GitHub" pinned to the bottom-right of the detail pane, for an entry that has
+    /// a full write-up there (see GitHubLinks) - drawn, hovered and clicked by LayeredWidgetForm's own
+    /// ContentButton mechanism.</summary>
+    protected override IReadOnlyList<ContentButton> GetContentButtons(int contentWidth, int contentHeight)
+    {
+        if (SelectedGitHubLink is not { } url)
+            return Array.Empty<ContentButton>();
+
+        var detail = GetDetailArea(contentWidth, contentHeight);
+        if (detail.Width < GitHubButtonWidth || detail.Height < DetailTitleHeight + GitHubButtonHeight)
+            return Array.Empty<ContentButton>();
+
+        var rect = new Rectangle(detail.Right - GitHubButtonWidth, detail.Bottom - GitHubButtonHeight, GitHubButtonWidth, GitHubButtonHeight);
+        return new[] { new ContentButton("View on GitHub", rect, () => OpenLink(url)) };
+    }
+
+    private void OpenLink(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+        {
+            MessageBox.Show(this, $"Couldn't open your browser:\n\n{ex.Message}", "Readme",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     protected override void PaintContent(Graphics g, int contentWidth, int contentHeight)

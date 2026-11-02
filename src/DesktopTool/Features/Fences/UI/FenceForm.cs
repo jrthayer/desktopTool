@@ -710,6 +710,9 @@ internal sealed class FenceForm : LayeredWidgetForm
 
     protected override int SnapMargin => _model.Margin;
 
+    // The fence holding the Recycle Bin is the Fence Trash Can, which has its own Readme entry.
+    protected override string HelpEntry => _model.Files.Any(f => f.IsRecycleBin) ? "Fence Trash Can" : "Fences";
+
     // ComputeMovedBody/ComputeResizedBody/BeginSnapDrag all use LayeredWidgetForm's own defaults
     // unchanged - this fence's own snapping (against every other live widget's edges - other fences,
     // the Layout Launcher, any future widget - and custom snap lines) is exactly what those defaults

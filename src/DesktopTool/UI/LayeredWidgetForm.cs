@@ -1138,11 +1138,36 @@ internal abstract class LayeredWidgetForm : Form
     {
         get
         {
-            var combined = new List<ChromeButton>(ExtraButtons.Count + 1) { CopySettingsButton };
+            var combined = new List<ChromeButton>(ExtraButtons.Count + 2) { CopySettingsButton };
             combined.AddRange(ExtraButtons);
+            // Last on purpose: buttons drop into the Settings dropdown outermost-first (see
+            // VisibleExtraButtonCount), so Help is always the first to go when the bar runs out of room.
+            if (HelpEntry is { } entry)
+                combined.Add(new ChromeButton("Help", HelpButtonWidth, () => ReadmeEntryRequested?.Invoke(entry),
+                    $"Help: {entry}", PaintHelpGlyph));
             return combined;
         }
     }
+
+    /// <summary>The Readme entry (by title - see ReadmeWidget.DefaultEntries) describing this widget.
+    /// Non-null adds a Help button at the outer end of the bar that opens the Readme with that entry
+    /// selected (see ReadmeEntryRequested). Null by default - only widgets that have an entry of their
+    /// own opt in.</summary>
+    protected virtual string? HelpEntry => null;
+
+    /// <summary>Raised by any widget's Help button with its HelpEntry - TrayApplicationContext, which
+    /// owns the single Readme window, is the only subscriber. Static so no widget needs a reference to
+    /// that window, the same way _liveWidgets lets widgets find each other.</summary>
+    internal static event Action<string>? ReadmeEntryRequested;
+
+    private const int HelpButtonWidth = 22;
+    private const int HelpIconInset = 3;
+
+    /// <summary>The Help button's circled "i" (see InfoIcon) - protected so a widget with its own
+    /// differently-wired help button (Widget Manager's, which opens the Readme without picking an
+    /// entry) still looks identical.</summary>
+    protected static void PaintHelpGlyph(Graphics g, Rectangle rect) =>
+        InfoIcon.Paint(g, Rectangle.Inflate(rect, -HelpIconInset, -HelpIconInset), Color.WhiteSmoke);
 
     /// <summary>How many of AllBarButtons (Copy Settings first, then every ExtraButtons entry in
     /// order), counting from index 0, still fit on the bar at contentWidth - generalizes what used to

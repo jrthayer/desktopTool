@@ -290,6 +290,8 @@ internal sealed class WallpaperWidget : LayeredWidgetForm
 
     protected override int SnapMargin => _model.Margin;
 
+    protected override string HelpEntry => "Wallpapers";
+
     protected override void OnDragEnd()
     {
         if (NativeMethods.GetWindowRect(Handle, out var rect))

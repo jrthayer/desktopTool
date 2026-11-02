@@ -220,6 +220,8 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
 
     protected override int SnapMargin => _model.Margin;
 
+    protected override string HelpEntry => "Layout Launcher";
+
     // ComputeMovedBody/ComputeResizedBody/BeginSnapDrag/SupportsResize/ResizableEdges all use
     // LayeredWidgetForm's own defaults unchanged - full, unrestricted resize on every edge, snapping
     // against every other live widget's edges (fences, any future widget) and custom snap lines the

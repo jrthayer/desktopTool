@@ -99,9 +99,10 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     // Forms.ToolTip flashes its default look for a frame" reason - see that class's own comment.
     private readonly PaintedTooltip _rowTooltip = new();
 
-    /// <summary>"?" (opens the Readme window) chained right off Settings/Copy Settings, then Close
-    /// (× - hides, same as Layout Launcher's own "x") at the outer edge - LayeredWidgetForm's own
-    /// ChromeButton mechanism instead of hand-rolled rect-chaining/paint/hit-test/arm-fire code.</summary>
+    /// <summary>Close (× - hides, same as Layout Launcher's own "x") chained right off Settings/Copy
+    /// Settings, then Help (opens the Readme window, same circled "i" as every other widget's Help
+    /// button) at the outer edge - LayeredWidgetForm's own ChromeButton mechanism instead of
+    /// hand-rolled rect-chaining/paint/hit-test/arm-fire code.</summary>
     protected override IReadOnlyList<ChromeButton> ExtraButtons { get; }
 
     /// <summary>Fired when the Layout Launcher row's "Edit Layouts" button is clicked - lets
@@ -140,8 +141,10 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
         ExtraButtons = new List<ChromeButton>
         {
-            new("?", 22, () => HelpRequested?.Invoke(this, EventArgs.Empty), "Help"),
             new("×", 22, HideAndPersist, "Hide Widget Manager"),
+            // Last, and drawn with the same glyph, to match every other widget's Help button (see
+            // LayeredWidgetForm.HelpEntry) - so it's also the first to drop into the Settings dropdown.
+            new("Help", 22, () => HelpRequested?.Invoke(this, EventArgs.Empty), "Help", PaintHelpGlyph),
         };
 
         FormBorderStyle = FormBorderStyle.None;

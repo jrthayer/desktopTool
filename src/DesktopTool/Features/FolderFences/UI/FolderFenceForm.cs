@@ -449,6 +449,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     protected override Rectangle GetCurrentBody() => _model.Bounds;
     protected override int SnapMargin => _model.Margin;
 
+    protected override string HelpEntry => "Folder Fences";
+
     /// <summary>Extends the plain body's own top edge up by TabExtraHeight whenever the folder tab
     /// could be showing at all (see InflateForTabSnap) - a different widget dragged toward this one
     /// snaps flush against the tab's own visible top edge, not the invisible gap above it that a

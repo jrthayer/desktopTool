@@ -84,7 +84,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         var widgetManagerModel = _widgetManagerStore.Load();
         _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _wallpapers, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
         _widgetManager.EditLayoutsRequested += (_, _) => OpenLayoutEditor(null);
-        _widgetManager.HelpRequested += (_, _) => OpenReadme();
+        _widgetManager.HelpRequested += (_, _) => OpenReadme(null);
+        // Every other widget's own Help button - opens the Readme on that widget's entry.
+        LayeredWidgetForm.ReadmeEntryRequested += OpenReadme;
 
         var menu = new ContextMenuStrip
         {
@@ -194,15 +196,19 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _layoutEditor.Show();
     }
 
-    private void OpenReadme()
+    /// <summary>entryTitle selects that entry (a widget's own Help button); null just opens or
+    /// surfaces the Readme as it is (Widget Manager's "?").</summary>
+    private void OpenReadme(string? entryTitle)
     {
         if (_readmeForm is { IsDisposed: false })
         {
+            if (entryTitle is not null)
+                _readmeForm.SelectEntry(entryTitle);
             _readmeForm.Activate();
             return;
         }
 
-        _readmeForm = new ReadmeWidget(_fenceManager);
+        _readmeForm = entryTitle is null ? new ReadmeWidget(_fenceManager) : new ReadmeWidget(_fenceManager, entryTitle);
         _readmeForm.FormClosed += (_, _) => _readmeForm = null;
         _readmeForm.Show();
     }
@@ -216,6 +222,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void OnExit(object? sender, EventArgs e)
     {
+        LayeredWidgetForm.ReadmeEntryRequested -= OpenReadme;
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _layoutEditor?.Dispose();
