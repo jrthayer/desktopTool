@@ -67,6 +67,35 @@ See [`src/DesktopTool/Features/WidgetManager/README.md`](src/DesktopTool/Feature
 for the full feature writeup and known limitations. All of its code lives
 under [`src/DesktopTool/Features/WidgetManager`](src/DesktopTool/Features/WidgetManager).
 
+### Wallpapers
+
+The **Wallpapers** widget sets each monitor's desktop background separately: a
+single image, a solid color, or a slideshow of a folder, each with its own
+interval and shuffle. It shows a small map of your monitors in their real
+arrangement; click one to change it. Toggled via its own row on the
+[Widget Manager](#widget-manager) widget.
+
+See [`src/DesktopTool/Features/Wallpapers/README.md`](src/DesktopTool/Features/Wallpapers/README.md)
+for how each kind of background is applied and the known limitations. All of
+its code lives under [`src/DesktopTool/Features/Wallpapers`](src/DesktopTool/Features/Wallpapers).
+
+**Limitations:**
+- Slideshows only change images while Desktop Tool is running. After you
+  exit, the last image stays. On restart, an overdue monitor changes right
+  away and the others wait out the rest of their interval.
+- How images are fitted (Fill, Fit, Stretch, Center, Tile) is one Windows
+  setting shared by every monitor. Span isn't offered, because it would
+  override every per-monitor choice.
+- Windows can't give each monitor its own solid color, so a solid color is
+  saved as an image of that color at the monitor's resolution (in
+  `%APPDATA%\DesktopTool\Wallpapers\`) and set as that monitor's wallpaper.
+- Choosing a background here replaces any Windows slideshow or Windows
+  Spotlight background.
+- Changing a monitor's wallpaper in Windows Settings doesn't stop a slideshow
+  running on it; the slideshow's next change replaces your pick.
+- If a slideshow folder is moved or emptied, that monitor's tile shows a
+  warning icon, and the slideshow tries again once per interval.
+
 ### Snapping
 
 The pure edge-snapping geometry (`SnapEngine`) that gives both Fences and

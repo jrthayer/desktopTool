@@ -3,6 +3,8 @@ using DesktopTool.Features.FolderFences;
 using DesktopTool.Features.Layouts;
 using DesktopTool.Features.Layouts.UI;
 using DesktopTool.Features.Readme.UI;
+using DesktopTool.Features.Wallpapers;
+using DesktopTool.Features.Wallpapers.UI;
 using DesktopTool.Features.WidgetManager;
 using DesktopTool.Features.WidgetManager.UI;
 using DesktopTool.UI;
@@ -21,6 +23,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private readonly LayoutLauncherStore _layoutLauncherStore = new();
     private readonly WidgetManagerStore _widgetManagerStore = new();
+    private readonly WallpaperWidgetStore _wallpaperWidgetStore = new();
+
+    // Applies each monitor's chosen background and runs the per-monitor slideshow timer - see
+    // WallpaperService. Owned here rather than by the widget, so slideshows keep advancing while the
+    // Wallpapers widget itself is hidden.
+    private readonly WallpaperService _wallpaperService = new(new WallpaperSettingsStore());
 
     // At most one editor open at a time - OnManageLayouts activates this instead of opening a
     // second copy, the same "don't duplicate, just surface the existing one" idea FenceManager's
@@ -39,6 +47,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
     // any more - only Widget Manager's own Layout Launcher row does (LayoutLauncherWidget.
     // ToggleVisible), same "created once, never disposed" object either way.
     private readonly LayoutLauncherWidget _layoutLauncher;
+
+    // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
+    // Widget Manager's own Wallpapers row.
+    private readonly WallpaperWidget _wallpapers;
 
     // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
     // the tray's own top-level "Widget Manager" item rather than opened fresh each time.
@@ -63,10 +75,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _layoutLauncher = new LayoutLauncherWidget(_layoutManager, _fenceManager, layoutLauncherModel, _layoutLauncherStore);
         _layoutLauncher.ManageLayoutsRequested += (_, profileId) => OpenLayoutEditor(profileId);
 
-        // Needs _layoutLauncher to already exist - its own row reads/toggles that widget's Visible
-        // directly rather than through a separate manager class.
+        var wallpaperModel = _wallpaperWidgetStore.Load();
+        _wallpapers = new WallpaperWidget(_wallpaperService, _fenceManager, wallpaperModel, _wallpaperWidgetStore);
+        _wallpaperService.Start();
+
+        // Needs _layoutLauncher/_wallpapers to already exist - their own rows read/toggle those
+        // widgets' Visible directly rather than through a separate manager class.
         var widgetManagerModel = _widgetManagerStore.Load();
-        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
+        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _wallpapers, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
         _widgetManager.EditLayoutsRequested += (_, _) => OpenLayoutEditor(null);
         _widgetManager.HelpRequested += (_, _) => OpenReadme();
 
@@ -131,6 +147,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // already exactly what was just loaded.
         if (layoutLauncherModel.Visible)
             _layoutLauncher.Show();
+        if (wallpaperModel.Visible)
+            _wallpapers.Show();
         if (widgetManagerModel.Visible)
             _widgetManager.Show();
 
@@ -203,6 +221,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _layoutEditor?.Dispose();
         _readmeForm?.Dispose();
         _layoutLauncher.Shutdown();
+        _wallpapers.Shutdown();
+        _wallpaperService.Dispose();
         _widgetManager.Shutdown();
         _fenceManager.Dispose();
         _folderFenceManager.Dispose();

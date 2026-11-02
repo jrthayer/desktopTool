@@ -99,6 +99,13 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
             "around it rather than sitting in an ordinary-sized fence. Widget Manager's own switch " +
             "adds or removes it; while it exists, it hides the real desktop's own Recycle Bin icon " +
             "so it isn't shown twice."),
+        new("Wallpapers",
+            "A small map of your monitors in their real arrangement, each showing its current " +
+            "background. Click a monitor to give it its own image, solid color, or slideshow of a " +
+            "folder (with its own interval and shuffle). How images are fitted (Fill, Fit, Stretch, " +
+            "Center, Tile) is a single Windows setting for every monitor, under the widget's " +
+            "Settings menu. Slideshows only advance while Desktop Tool is running. Widget " +
+            "Manager's own switch shows or hides the widget."),
     };
 
     private readonly ReadmeModel _model;
