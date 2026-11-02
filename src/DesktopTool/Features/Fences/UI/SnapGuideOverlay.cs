@@ -56,21 +56,25 @@ internal sealed class SnapGuideOverlay : Form
     {
         base.OnPaint(e);
 
+        // span is the line's monitor working area. A line at its exclusive Right/Bottom edge (the
+        // default line along the taskbar, say) would otherwise paint its first pixel column/row
+        // INSIDE the taskbar, so the drawn position is pulled into the last pixel still within span
+        // - the snap value itself is untouched.
         foreach (var (orientation, position, highlighted, span) in _lines)
         {
             using var pen = new Pen(highlighted ? HighlightColor : LineColor, highlighted ? 2f : 1f);
             if (orientation == SnapOrientation.Horizontal)
             {
-                var y = PointToClient(new Point(0, position)).Y;
+                var y = PointToClient(new Point(0, Math.Clamp(position, span.Top, span.Bottom - 1))).Y;
                 var left = PointToClient(new Point(span.Left, 0)).X;
-                var right = PointToClient(new Point(span.Right, 0)).X;
+                var right = PointToClient(new Point(span.Right - 1, 0)).X;
                 e.Graphics.DrawLine(pen, left, y, right, y);
             }
             else
             {
-                var x = PointToClient(new Point(position, 0)).X;
+                var x = PointToClient(new Point(Math.Clamp(position, span.Left, span.Right - 1), 0)).X;
                 var top = PointToClient(new Point(0, span.Top)).Y;
-                var bottom = PointToClient(new Point(0, span.Bottom)).Y;
+                var bottom = PointToClient(new Point(0, span.Bottom - 1)).Y;
                 e.Graphics.DrawLine(pen, x, top, x, bottom);
             }
         }

@@ -1827,8 +1827,8 @@ internal abstract class LayeredWidgetForm : Form
         if (IsResizing || (MouseButtons & MouseButtons.Right) == 0)
         {
             var (vGuides, hGuides) = GetOtherWidgetEdges();
-            var monitor = Screen.FromRectangle(DragStartBody).Bounds;
-            Fences.SnapLines.BeginDrag(includeCustomLines: true, vGuides, hGuides, monitor);
+            var workArea = Screen.FromRectangle(DragStartBody).WorkingArea;
+            Fences.SnapLines.BeginDrag(includeCustomLines: true, vGuides, hGuides, workArea);
         }
         else
         {

@@ -141,15 +141,18 @@ public sealed class SnapLineManager : IDisposable
 
         var showCustomLines = includeCustomLines && Enabled;
         var lines = showCustomLines
-            ? _lines.Select(l => (l.Orientation, l.Position, Highlighted: false, Span: MonitorSpanOf(l))).ToList()
+            ? _lines.Where(l => WithinArea(l.Orientation, l.Position, WorkAreaOf(l)))
+                .Select(l => (l.Orientation, l.Position, Highlighted: false, Span: WorkAreaOf(l))).ToList()
             : new List<(SnapOrientation Orientation, int Position, bool Highlighted, Rectangle Span)>();
 
         if (!showCustomLines)
         {
             if (verticalGuides is not null)
-                lines.AddRange(verticalGuides.Distinct().Select(p => (SnapOrientation.Vertical, p, false, guideSpan)));
+                lines.AddRange(verticalGuides.Distinct().Where(p => WithinArea(SnapOrientation.Vertical, p, guideSpan))
+                    .Select(p => (SnapOrientation.Vertical, p, false, guideSpan)));
             if (horizontalGuides is not null)
-                lines.AddRange(horizontalGuides.Distinct().Select(p => (SnapOrientation.Horizontal, p, false, guideSpan)));
+                lines.AddRange(horizontalGuides.Distinct().Where(p => WithinArea(SnapOrientation.Horizontal, p, guideSpan))
+                    .Select(p => (SnapOrientation.Horizontal, p, false, guideSpan)));
         }
 
         _guideOverlay.SetLines(lines);
@@ -166,19 +169,19 @@ public sealed class SnapLineManager : IDisposable
     /// dragging feel "sticky" with several fences and lines on screen at once.</summary>
     public SnapResult SnapMove(Rectangle proposedBody, IReadOnlyList<int> verticalCandidates, IReadOnlyList<int> horizontalCandidates, int margin, bool includeCustomLines = true)
     {
-        var monitor = Screen.FromRectangle(proposedBody).Bounds;
-        var (vCandidates, hCandidates) = MergeCandidates(monitor, margin, verticalCandidates, horizontalCandidates, includeCustomLines);
+        var screen = Screen.FromRectangle(proposedBody);
+        var (vCandidates, hCandidates) = MergeCandidates(screen.Bounds, screen.WorkingArea, margin, verticalCandidates, horizontalCandidates, includeCustomLines);
         var result = SnapEngine.SnapMove(proposedBody, vCandidates, hCandidates);
-        UpdateDragOverlay(result, monitor, margin, includeCustomLines, verticalCandidates, horizontalCandidates);
+        UpdateDragOverlay(result, screen.WorkingArea, margin, includeCustomLines, verticalCandidates, horizontalCandidates);
         return result;
     }
 
     public SnapResult SnapResize(Rectangle proposedBody, SnapEdges activeEdges, IReadOnlyList<int> verticalCandidates, IReadOnlyList<int> horizontalCandidates, int margin)
     {
-        var monitor = Screen.FromRectangle(proposedBody).Bounds;
-        var (vCandidates, hCandidates) = MergeCandidates(monitor, margin, verticalCandidates, horizontalCandidates, includeCustomLines: true);
+        var screen = Screen.FromRectangle(proposedBody);
+        var (vCandidates, hCandidates) = MergeCandidates(screen.Bounds, screen.WorkingArea, margin, verticalCandidates, horizontalCandidates, includeCustomLines: true);
         var result = SnapEngine.SnapResize(proposedBody, activeEdges, vCandidates, hCandidates);
-        UpdateDragOverlay(result, monitor, margin, includeCustomLines: true, verticalCandidates, horizontalCandidates);
+        UpdateDragOverlay(result, screen.WorkingArea, margin, includeCustomLines: true, verticalCandidates, horizontalCandidates);
         return result;
     }
 
@@ -289,7 +292,7 @@ public sealed class SnapLineManager : IDisposable
     /// candidates (see its own comment - those candidates are real, already being offered) settled
     /// margin pixels away from the line with no guide there and the line itself never highlighting,
     /// reading as "the margin isn't doing anything" even though the snap itself was working.</summary>
-    private void UpdateDragOverlay(SnapResult result, Rectangle monitor, int margin, bool includeCustomLines, IReadOnlyList<int> extraVertical, IReadOnlyList<int> extraHorizontal)
+    private void UpdateDragOverlay(SnapResult result, Rectangle workArea, int margin, bool includeCustomLines, IReadOnlyList<int> extraVertical, IReadOnlyList<int> extraHorizontal)
     {
         _guideOverlay ??= new SnapGuideOverlay();
 
@@ -306,14 +309,10 @@ public sealed class SnapLineManager : IDisposable
         {
             foreach (var l in _lines)
             {
-                var span = MonitorSpanOf(l);
+                var span = WorkAreaOf(l);
                 var snapped = l.Orientation == SnapOrientation.Horizontal ? hSnapped : vSnapped;
-                lines.Add((l.Orientation, l.Position, snapped.Contains(l.Position), span));
-                if (margin > 0)
-                {
-                    lines.Add((l.Orientation, l.Position - margin, snapped.Contains(l.Position - margin), span));
-                    lines.Add((l.Orientation, l.Position + margin, snapped.Contains(l.Position + margin), span));
-                }
+                foreach (var position in PositionsOf(l, margin, span))
+                    lines.Add((l.Orientation, position, snapped.Contains(position), span));
             }
         }
 
@@ -326,21 +325,42 @@ public sealed class SnapLineManager : IDisposable
         // listed above (possible once both sources are combined), never dropped just because
         // includeCustomLines happens to be true otherwise.
         foreach (var position in extraVertical.Distinct())
-            if (!customPositions.Contains((SnapOrientation.Vertical, position)))
-                lines.Add((SnapOrientation.Vertical, position, vSnapped.Contains(position), monitor));
+            if (!customPositions.Contains((SnapOrientation.Vertical, position)) && WithinArea(SnapOrientation.Vertical, position, workArea))
+                lines.Add((SnapOrientation.Vertical, position, vSnapped.Contains(position), workArea));
         foreach (var position in extraHorizontal.Distinct())
-            if (!customPositions.Contains((SnapOrientation.Horizontal, position)))
-                lines.Add((SnapOrientation.Horizontal, position, hSnapped.Contains(position), monitor));
+            if (!customPositions.Contains((SnapOrientation.Horizontal, position)) && WithinArea(SnapOrientation.Horizontal, position, workArea))
+                lines.Add((SnapOrientation.Horizontal, position, hSnapped.Contains(position), workArea));
 
         _guideOverlay.SetLines(lines);
     }
 
-    /// <summary>A line saved before per-monitor scoping existed has a zero-size MonitorBounds -
-    /// treat that as unscoped (full virtual screen) rather than an invisible zero-width line.</summary>
-    private static Rectangle MonitorSpanOf(SnapLineModel line)
+    /// <summary>The usable area (monitor minus taskbar) a line lives in - what it's drawn across
+    /// and what its candidates are kept inside, so nothing ever lands over the taskbar. A line
+    /// saved before per-monitor scoping existed has a zero-size MonitorBounds - treat that as
+    /// unscoped (full virtual screen) rather than an invisible zero-width line.</summary>
+    private static Rectangle WorkAreaOf(SnapLineModel line)
     {
         var bounds = line.MonitorBounds;
-        return bounds.Width > 0 && bounds.Height > 0 ? bounds : SystemInformation.VirtualScreen;
+        return bounds.Width > 0 && bounds.Height > 0 ? Screen.FromRectangle(bounds).WorkingArea : SystemInformation.VirtualScreen;
+    }
+
+    /// <summary>Whether position falls inside area on its own axis, edges inclusive - area.Right/
+    /// Bottom is still valid (a widget whose Right equals it sits flush against the taskbar), but
+    /// anything past it is over the taskbar or off-screen.</summary>
+    private static bool WithinArea(SnapOrientation orientation, int position, Rectangle area) =>
+        orientation == SnapOrientation.Vertical
+            ? position >= area.Left && position <= area.Right
+            : position >= area.Top && position <= area.Bottom;
+
+    /// <summary>A custom line's flush position plus its two margin copies (see MergeCandidates),
+    /// keeping only the ones inside area - e.g. the default line along the taskbar's edge keeps its
+    /// inward margin copy but drops the outward one that would sit over the taskbar.</summary>
+    private static IEnumerable<int> PositionsOf(SnapLineModel line, int margin, Rectangle area)
+    {
+        var positions = margin > 0
+            ? new[] { line.Position, line.Position - margin, line.Position + margin }
+            : new[] { line.Position };
+        return positions.Where(p => WithinArea(line.Orientation, p, area));
     }
 
     /// <summary>Only a custom line whose own monitor matches the one currently being dragged over is
@@ -353,10 +373,12 @@ public sealed class SnapLineManager : IDisposable
     /// own edge (which only makes sense padded outward, away from its own span - see
     /// FenceManager.GetOtherFenceEdges), a standalone line has no "interior" to avoid overlapping,
     /// so both directions are equally valid depending on which side the fence approaches from.</summary>
-    private (List<int> Vertical, List<int> Horizontal) MergeCandidates(Rectangle monitor, int margin, IReadOnlyList<int> extraVertical, IReadOnlyList<int> extraHorizontal, bool includeCustomLines)
+    private (List<int> Vertical, List<int> Horizontal) MergeCandidates(Rectangle monitor, Rectangle workArea, int margin, IReadOnlyList<int> extraVertical, IReadOnlyList<int> extraHorizontal, bool includeCustomLines)
     {
-        var vertical = new List<int>(extraVertical);
-        var horizontal = new List<int>(extraHorizontal);
+        // Other widgets' edges (and their margin copies) are dropped too once they'd land over the
+        // taskbar - e.g. a widget flush against it would otherwise offer Right + margin inside it.
+        var vertical = extraVertical.Where(p => WithinArea(SnapOrientation.Vertical, p, workArea)).ToList();
+        var horizontal = extraHorizontal.Where(p => WithinArea(SnapOrientation.Horizontal, p, workArea)).ToList();
 
         if (!includeCustomLines || !Enabled)
             return (vertical, horizontal);
@@ -369,12 +391,7 @@ public sealed class SnapLineManager : IDisposable
                 continue;
 
             var target = line.Orientation == SnapOrientation.Vertical ? vertical : horizontal;
-            target.Add(line.Position);
-            if (margin > 0)
-            {
-                target.Add(line.Position - margin);
-                target.Add(line.Position + margin);
-            }
+            target.AddRange(PositionsOf(line, margin, WorkAreaOf(line)));
         }
 
         return (vertical, horizontal);
