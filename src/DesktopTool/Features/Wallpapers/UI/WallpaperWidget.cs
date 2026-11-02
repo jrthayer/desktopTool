@@ -436,11 +436,22 @@ internal sealed class WallpaperWidget : LayeredWidgetForm
         {
             BackgroundKind.Color => "Solid color",
             BackgroundKind.Slideshow when _service.GetSlideshowProblem(monitor.DeviceId) is { } problem => $"Slideshow problem: {problem}",
-            BackgroundKind.Slideshow => $"Slideshow: {Path.GetFileName(background?.SlideshowFolder?.TrimEnd('\\'))} (every {IntervalLabel(background?.IntervalMinutes ?? 30)})",
+            BackgroundKind.Slideshow => $"Slideshow: {Path.GetFileName(background?.SlideshowFolder?.TrimEnd('\\'))} · every {IntervalLabel(background?.IntervalMinutes ?? 30)}",
+            _ when monitor.CurrentImage is { } image && !File.Exists(image) => $"{Path.GetFileName(image)} (file no longer exists)",
             _ => monitor.CurrentImage is { } image ? Path.GetFileName(image) : "No image",
         };
-        return $"{header} · {detail}";
+        return $"{header}\n{detail}";
     }
+
+    /// <summary>Tile text when there's no thumbnail to draw. Windows keeps showing its own cached
+    /// copy after the original file is deleted or moved, so "file not found" is far more common than
+    /// a monitor genuinely having no image.</summary>
+    private static string ImageProblem(MonitorInfo monitor) => monitor.CurrentImage switch
+    {
+        null => "No image",
+        { } path when !File.Exists(path) => "Image file not found",
+        _ => "Can't preview image",
+    };
 
     private static string IntervalLabel(int minutes) =>
         Intervals.FirstOrDefault(i => i.Minutes == minutes).Label ?? $"{minutes} minutes";
@@ -744,7 +755,7 @@ internal sealed class WallpaperWidget : LayeredWidgetForm
             g.FillRectangle(fill, tile);
             using var brush = new SolidBrush(AppTheme.DisabledText);
             using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            g.DrawString("No image", Font, brush, tile, format);
+            g.DrawString(ImageProblem(monitor), Font, brush, tile, format);
         }
 
         var hovered = index == _hoverTile;

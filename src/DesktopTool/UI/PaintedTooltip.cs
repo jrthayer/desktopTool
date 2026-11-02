@@ -56,27 +56,15 @@ internal sealed class PaintedTooltip
         if (_text is not { } text)
             return null;
 
+        // Measured with the same GDI+ DrawString text Paint actually draws (not TextRenderer's GDI
+        // measurement, which comes out narrower) - otherwise text that just fits by GDI's measure wraps
+        // differently when GDI+ draws it, and the last line gets clipped by the pill. A width limit
+        // wraps text too wide for bounds and grows the pill's height instead of overflowing past
+        // bounds (see this class's own comment); explicit line breaks in text work the same way.
         var maxTextWidth = Math.Max(1, bounds.Width - PaddingX * 2);
-        var singleLineWidth = TextRenderer.MeasureText(text, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
-
-        int width, height;
-        if (singleLineWidth <= maxTextWidth)
-        {
-            width = singleLineWidth + PaddingX * 2;
-            height = MinHeight;
-        }
-        else
-        {
-            // Too wide for one line at this bounds - wrap within the available width and grow the
-            // pill's height to fit instead of overflowing past bounds (see this class's own comment:
-            // it can never extend past the bounds it's given). Only reached by callers feeding this
-            // longer text than the short row-action strings it was originally sized for (e.g. a
-            // feature's Description) - a short tooltip that already fits on one line takes the branch
-            // above unchanged.
-            var wrapped = TextRenderer.MeasureText(text, font, new Size(maxTextWidth, int.MaxValue), TextFormatFlags.WordBreak);
-            width = wrapped.Width + PaddingX * 2;
-            height = Math.Max(MinHeight, wrapped.Height + PaddingY * 2);
-        }
+        var measured = MeasureGraphics.MeasureString(text, font, maxTextWidth, CenteredFormat);
+        var width = (int)Math.Ceiling(measured.Width) + PaddingX * 2;
+        var height = Math.Max(MinHeight, (int)Math.Ceiling(measured.Height) + PaddingY * 2);
 
         var x = Math.Clamp(_targetRect.X, bounds.X, Math.Max(bounds.X, bounds.Right - width));
         var below = _targetRect.Bottom + Gap;
@@ -112,8 +100,20 @@ internal sealed class PaintedTooltip
         var previousTextHint = g.TextRenderingHint;
         g.TextRenderingHint = TextRenderingHint.AntiAlias;
         using (var textBrush = new SolidBrush(Color.WhiteSmoke))
-        using (var textFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-            g.DrawString(text, font, textBrush, pillRect, textFormat);
+            g.DrawString(text, font, textBrush, pillRect, CenteredFormat);
         g.TextRenderingHint = previousTextHint;
+    }
+
+    private static readonly StringFormat CenteredFormat = new() { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+
+    // A tiny off-screen surface just for GetPillRect's measuring, which has no Graphics of its own
+    // to measure with - set to the same AntiAlias hint Paint draws with, so the two agree.
+    private static readonly Graphics MeasureGraphics = CreateMeasureGraphics();
+
+    private static Graphics CreateMeasureGraphics()
+    {
+        var g = Graphics.FromImage(new Bitmap(1, 1));
+        g.TextRenderingHint = TextRenderingHint.AntiAlias;
+        return g;
     }
 }
