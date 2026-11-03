@@ -169,7 +169,12 @@ Earlier attempts that sent only `SHChangeNotify`, forced a repaint, or
 posted the desktop's Refresh command on their own didn't work, because
 Explorer was still using the old setting when it redrew.
 
-**Limitations:** folder fences don't follow this setting; they always list
-hidden files.
-The setting is correct immediately either way - only the visual update is
-delayed.
+Folder fences follow the setting too, the same way Explorer does: hidden
+items show only while Show Hidden Files is on, and protected system files
+(like `desktop.ini`) stay hidden unless Windows' "Hide protected operating
+system files" option is turned off. They re-read their folder as soon as the
+setting changes, whether from Desktop Tool or Explorer's Folder Options.
+
+The notifications and refreshes run on a background thread, so a busy
+program that's slow to answer the settings broadcast can't freeze Desktop
+Tool.

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
+using System.Runtime.InteropServices;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.Fences.Native;
 using DesktopTool.Features.Fences.UI;
@@ -1010,7 +1011,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         _currentSubPath is null ? _model.RootFolderPath : Path.Combine(_model.RootFolderPath, _currentSubPath);
 
     /// <summary>Rescans CurrentDirectory fresh off disk - folders first, then files, alphabetical
-    /// within each (Explorer's own default ordering). Never throws: a folder that's become
+    /// within each (Explorer's own default ordering). Hidden items follow Windows' Show Hidden Files
+    /// setting the same way Explorer does (see HiddenFilesManager.IsShown). Never throws: a folder that's become
     /// inaccessible or vanished out from under this fence just shows as empty rather than crashing
     /// it, the same tolerant approach GetIcon below already takes for a single missing file. Also
     /// re-checks the root itself (see _rootMissing), and drops back to the root when only the
@@ -1033,12 +1035,17 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         if (dir is null || !Directory.Exists(dir))
             return;
 
+        var showHidden = HiddenFilesManager.IsEnabled;
+        var showProtected = HiddenFilesManager.ShowsProtectedSystemFiles;
+        bool Shown(FileSystemInfo info) => HiddenFilesManager.IsShown(info.Attributes, showHidden, showProtected);
+
         try
         {
-            foreach (var d in Directory.GetDirectories(dir).OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-                _entries.Add(new GridEntry(d, IsDirectory: true));
-            foreach (var f in Directory.GetFiles(dir).OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
-                _entries.Add(new GridEntry(f, IsDirectory: false));
+            var folder = new DirectoryInfo(dir);
+            foreach (var d in folder.EnumerateDirectories().Where(Shown).OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+                _entries.Add(new GridEntry(d.FullName, IsDirectory: true));
+            foreach (var f in folder.EnumerateFiles().Where(Shown).OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
+                _entries.Add(new GridEntry(f.FullName, IsDirectory: false));
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {
@@ -1163,6 +1170,24 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     {
         _refreshTimer.Stop();
         _refreshTimer.Start();
+    }
+
+    /// <summary>Re-reads the folder - for a change that isn't a filesystem event, like Windows' Show
+    /// Hidden Files setting (see FolderFenceManager and the WM_SETTINGCHANGE case in WndProc).</summary>
+    internal void RefreshForSettingChange() => ScheduleRefresh();
+
+    private const int WM_SETTINGCHANGE = 0x001A;
+
+    /// <summary>Explorer's Folder Options (and Desktop Tool's own Show Hidden Files toggle) broadcast
+    /// WM_SETTINGCHANGE "ShellState" after changing the hidden-files options - re-read the folder so
+    /// a change made outside Desktop Tool shows up here too.</summary>
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WM_SETTINGCHANGE && m.LParam != IntPtr.Zero
+            && Marshal.PtrToStringUni(m.LParam) == "ShellState")
+            ScheduleRefresh();
+
+        base.WndProc(ref m);
     }
 
     private void OnWatcherError(object sender, ErrorEventArgs e) =>

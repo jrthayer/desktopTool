@@ -22,6 +22,15 @@ public sealed class FolderFenceManager : IDisposable
     public FolderFenceManager(FenceManager fences)
     {
         _fences = fences;
+        // Desktop Tool's own Show Hidden Files toggle - re-read every folder fence straight away
+        // rather than waiting for the (background) WM_SETTINGCHANGE broadcast to arrive.
+        HiddenFilesManager.Changed += OnHiddenFilesChanged;
+    }
+
+    private void OnHiddenFilesChanged(object? sender, EventArgs e)
+    {
+        foreach (var form in _forms.Values)
+            form.RefreshForSettingChange();
     }
 
     public void LoadAndShowAll()
@@ -199,6 +208,7 @@ public sealed class FolderFenceManager : IDisposable
     /// comment).</summary>
     public void Dispose()
     {
+        HiddenFilesManager.Changed -= OnHiddenFilesChanged;
         foreach (var form in _forms.Values)
             form.Dispose();
     }

@@ -33,6 +33,31 @@ internal static class HiddenFilesManager
     /// can repaint when another one changes it.</summary>
     public static event EventHandler? Changed;
 
+    /// <summary>Windows' separate "Hide protected operating system files" option (Folder Options),
+    /// stored as Advanced\ShowSuperHidden = 1 when they're shown. Off by default - Explorer keeps
+    /// hiding Hidden+System files like desktop.ini even while hidden files are shown.</summary>
+    public static bool ShowsProtectedSystemFiles
+    {
+        get
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(AdvancedKeyPath, writable: false);
+            return key?.GetValue("ShowSuperHidden") as int? == 1;
+        }
+    }
+
+    /// <summary>Whether Explorer would show an item with these attributes right now - the same two
+    /// rules it applies: Hidden items only while Show Hidden Files is on, and Hidden+System items
+    /// (protected OS files) only while protected files are shown too. For anything listing a real
+    /// folder the way Explorer would (folder fences).</summary>
+    public static bool IsShown(FileAttributes attributes, bool showHidden, bool showProtected)
+    {
+        if ((attributes & FileAttributes.Hidden) == 0)
+            return true;
+        if (!showHidden)
+            return false;
+        return (attributes & FileAttributes.System) == 0 || showProtected;
+    }
+
     /// <summary>Changes the setting and makes it show up straight away - on the desktop and in every
     /// already-open File Explorer window - instead of only after an F5 in each. Writing the registry
     /// value alone changes the setting but not what's on screen; the steps after it are what make
