@@ -32,6 +32,8 @@ there's no toggle-switch control elsewhere in the app to reuse), and its own act
   its own `Visible`). No action button. Hiding the widget doesn't stop slideshows; they keep running.
 - **Junk Drawer** - the switch shows/hides the [Junk Drawer](../JunkDrawer/README.md) widget (reads/flips
   its own `Visible`). No action button.
+- **Fence Locker** - the switch shows/hides the [Fence Locker](../FenceLocker/README.md) widget (reads/flips
+  its own `Visible`). No action button. Hiding it doesn't unlock anything.
 
 The Fences switch also updates by itself whenever fences are shown or hidden in bulk
 (`FenceManager.VisibilityChanged`/`FolderFenceManager.VisibilityChanged`). The Junk Drawer's Hide

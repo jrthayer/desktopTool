@@ -110,6 +110,27 @@ See [`src/DesktopTool/Features/JunkDrawer/README.md`](src/DesktopTool/Features/J
 for details. All of its code lives under
 [`src/DesktopTool/Features/JunkDrawer`](src/DesktopTool/Features/JunkDrawer).
 
+### Fence Locker
+
+The **Fence Locker** widget puts locks on fences and folder fences. A locked
+fence won't open, give up, or let you edit its items until one of its
+criteria is met: a **time of day** window, a **special event** (you type why
+you need it, and that's logged), or a **password**. The widget lists saved
+**lock loadouts** - **Add Lock** makes one, and clicking one lets you click
+fences to place it on them. **Manage Locks** shows the fences locked right
+now. Every unlock prompt reminds you why you locked it, and every unlock is
+recorded in an **Unlock History** you can review from the widget. Toggled via
+its own row on the [Widget Manager](#widget-manager) widget.
+
+See [`src/DesktopTool/Features/FenceLocker/README.md`](src/DesktopTool/Features/FenceLocker/README.md)
+for details and how to add new kinds of criteria. All of its code lives under
+[`src/DesktopTool/Features/FenceLocker`](src/DesktopTool/Features/FenceLocker).
+
+**Limitations:** it's a self-control tool, not security - quitting Desktop
+Tool, opening the hidden `hiddenDesktop` folder, or launching a program from
+the Start menu gets around it. Password and special-event unlocks last until
+Desktop Tool restarts.
+
 ### Snapping
 
 The pure edge-snapping geometry (`SnapEngine`) that gives both Fences and

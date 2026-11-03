@@ -123,6 +123,14 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
             "the desktop). The Hide Desktop button hides every Desktop Tool widget, this one " +
             "included - bring them back with Show Desktop in the tray menu, or by double-clicking " +
             "the tray icon. Widget Manager's own switch shows or hides the widget."),
+        new("Fence Locker",
+            "Locks fences and folder fences so their items can't be opened, dragged out, or edited " +
+            "until a condition is met: a time of day window, a special event (you type why you " +
+            "need it - that's logged), or a password. Any one is enough. Every unlock prompt " +
+            "reminds you why you locked it. The widget lists lock loadouts: Add Lock makes one, " +
+            "and clicking one lets you click fences to place it on them. Manage Locks shows the " +
+            "fences locked right now; Unlock History shows every unlock. Password and " +
+            "special-event unlocks last until Desktop Tool restarts."),
     };
 
     private const string GitHubFeaturesUrl = "https://github.com/jrthayer/desktopTool/blob/master/src/DesktopTool/Features/";
@@ -139,6 +147,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         ["Fence Trash Can"] = GitHubFeaturesUrl + "Fences/README.md#recycle-bin",
         ["Wallpapers"] = GitHubFeaturesUrl + "Wallpapers/README.md",
         ["Junk Drawer"] = GitHubFeaturesUrl + "JunkDrawer/README.md",
+        ["Fence Locker"] = GitHubFeaturesUrl + "FenceLocker/README.md",
     };
 
     private const int GitHubButtonWidth = 120;

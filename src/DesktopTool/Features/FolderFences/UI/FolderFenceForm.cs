@@ -4,6 +4,8 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Runtime.InteropServices;
+using DesktopTool.Features.FenceLocker;
+using DesktopTool.Features.FenceLocker.UI;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.Fences.Native;
 using DesktopTool.Features.Fences.UI;
@@ -376,6 +378,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         _model = model;
         _manager = manager;
         _fences = fences;
+        FenceLocks.Changed += OnFenceLocksChanged;
 
         // Restores whichever subfolder this fence was last browsed into, re-validated against disk
         // first - the real folder could have been renamed/deleted/moved since the last session, in
@@ -391,7 +394,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
         ExtraButtons = new List<ChromeButton>
         {
-            new("+", 22, () => _manager.CreateFolderFenceLike(FolderFenceId), "Copy Folder Fence", PaintCopyIconGlyph),
+            new("+", 22, CopyFolderFence, "Copy Folder Fence", PaintCopyIconGlyph),
             new("−", 22, ClearFolder, "Clear Folder"),
             new("×", 22, ConfirmDelete, "Delete Folder Fence"),
         };
@@ -529,7 +532,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             || TryGetExtraButtonAt(contentWidth, onLeft, contentPoint, out _)))
             return HTCLIENT;
 
-        if (IsOverHeaderCloseButton(contentPoint))
+        // The padlock is clickable the same way, header or not.
+        if (IsOverHeaderCloseButton(contentPoint) || IsOverLockBadge(contentPoint))
             return HTCLIENT;
 
         // Same "carve this rect out of the header's own non-client HTBORDER territory" treatment as
@@ -625,6 +629,9 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         SetHoverIndex(-1);
         if (e.Data?.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } paths)
             return;
+        // Dropping into a locked folder fence (or connecting it to a folder) is an edit.
+        if (!EnsureUnlocked())
+            return;
 
         // An empty fence (or one whose folder has gone missing) adopts a single dropped folder as
         // its root.
@@ -657,6 +664,11 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
         if (TryArmHeaderCloseButton(contentPoint))
             return;
+        if (IsOverLockBadge(contentPoint))
+        {
+            _lockBadgeArmed = true;
+            return;
+        }
         if (_currentSubPath is not null && TitleVisible && HeaderClickableRect(contentSize.Width).Contains(contentPoint))
         {
             _backButtonArmed = true;
@@ -731,6 +743,14 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     /// accepted it, and the watcher refreshes this grid.</summary>
     private void RunItemDrag(GridEntry entry)
     {
+        // A locked fence's items can't be dragged out - ask, and don't start this drag either way.
+        if (FenceLocks.GetStatus(FolderFenceId) == FenceLockStatus.Locked)
+        {
+            EnsureUnlocked();
+            return;
+        }
+        if (!EnsureUnlocked())
+            return;
         _draggingEntry = entry;
         _dragGhost = new DragGhostWindow(GetIcon(entry.Path), GetDisplayName(entry));
         _dragGhost.MoveTo(Cursor.Position);
@@ -820,6 +840,15 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         var onLeft = ShouldSettingsButtonOpenLeft(contentSize.Width);
 
         FireArmedHeaderCloseButton(contentPoint);
+
+        if (_lockBadgeArmed)
+        {
+            _lockBadgeArmed = false;
+            if (IsOverLockBadge(contentPoint))
+                BeginInvoke(() => FenceLockBadge.HandleClick(FolderFenceId, _model.Name, this,
+                    RectangleToScreen(ToWindow(LockBadgeRect(GetContentSize().Width)))));
+            return;
+        }
 
         if (_backButtonArmed)
         {
@@ -929,6 +958,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     private void BrowseForFolder()
     {
+        if (!EnsureUnlocked())
+            return;
         using var dialog = new FolderBrowserDialog { Description = "Choose a folder for this fence to mirror" };
         if (dialog.ShowDialog(this) == DialogResult.OK)
             SetRootFolder(dialog.SelectedPath);
@@ -957,7 +988,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     private void ClearFolder()
     {
-        if (_model.RootFolderPath is null)
+        if (_model.RootFolderPath is null || !EnsureUnlocked())
             return;
         _model.RootFolderPath = null;
         _currentSubPath = null;
@@ -972,17 +1003,41 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     private void ConfirmDelete()
     {
+        if (!EnsureUnlocked())
+            return;
         var result = MessageBox.Show(this,
             $"Delete folder fence \"{_model.Name}\"? This only removes the widget - nothing on disk is deleted.",
             "Delete Folder Fence", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
         if (result == DialogResult.Yes)
+        {
             _manager.DeleteFolderFence(_model.Id);
+            FenceLocks.RemoveLock(_model.Id);
+        }
+    }
+
+    /// <summary>The fence lock gate (see FenceLocks) - true when nothing is stopping the action.</summary>
+    private bool EnsureUnlocked() => FenceLocks.EnsureUnlocked(FolderFenceId, _model.Name, this);
+
+    /// <summary>Copying a locked folder fence would hand out the same folder unlocked.</summary>
+    private void CopyFolderFence()
+    {
+        if (EnsureUnlocked())
+            _manager.CreateFolderFenceLike(FolderFenceId);
+    }
+
+    /// <summary>Renaming a locked folder fence (which renames the real folder) asks for the lock first.</summary>
+    protected override void BeginRename()
+    {
+        if (EnsureUnlocked())
+            base.BeginRename();
     }
 
     protected override void OnHeaderCloseButtonClick() => ConfirmDelete();
 
     private void NavigateInto(string path)
     {
+        if (!EnsureUnlocked())
+            return;
         _currentSubPath = Path.GetRelativePath(_model.RootFolderPath!, path);
         _model.CurrentSubPath = _currentSubPath;
         _manager.Save();
@@ -1271,7 +1326,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     private void OpenItem(string? path)
     {
-        if (path is null)
+        if (path is null || !EnsureUnlocked())
             return;
         try
         {
@@ -1283,8 +1338,10 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         }
     }
 
-    private static void ShowInExplorer(string path)
+    private void ShowInExplorer(string path)
     {
+        if (!EnsureUnlocked())
+            return;
         try
         {
             Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
@@ -1331,7 +1388,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     /// something from, only the real folder itself.</summary>
     private void ConfirmDeleteContextEntry()
     {
-        if (_contextEntry is not { } entry)
+        if (_contextEntry is not { } entry || !EnsureUnlocked())
             return;
 
         var kind = entry.IsDirectory ? "folder" : "file";
@@ -1574,8 +1631,16 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
     protected override void PersistStyle() => _manager.Save();
 
+    // Repaints the header padlock when this fence is locked, unlocked, or its time window opens/closes.
+    private void OnFenceLocksChanged(object? sender, EventArgs e)
+    {
+        if (IsHandleCreated && !IsDisposed)
+            RenderAndPresent();
+    }
+
     protected override void DisposeOwnedResources()
     {
+        FenceLocks.Changed -= OnFenceLocksChanged;
         DisposeWatchers();
         _refreshTimer.Dispose();
         _itemContextMenu?.Dispose();
@@ -1675,7 +1740,22 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             PaintEmptyState(g, contentWidth, contentHeight);
         else
             PaintItems(g, contentWidth, contentHeight);
+
+        // The padlock, while this folder fence has a lock (see FenceLockBadge).
+        g.ResetClip();
+        FenceLockBadge.Paint(g, ToWindow(LockBadgeRect(contentWidth)), FenceLocks.GetStatus(FolderFenceId));
     }
+
+    private Rectangle LockBadgeRect(int contentWidth) =>
+        FenceLockBadge.Rect(contentWidth, TitleRowHeight, ShowHeaderCloseButton ? HeaderCloseButtonSize : 0, TitleVisible);
+
+    // Clicking the padlock unlocks a locked folder fence or locks one unlocked this session (see
+    // FenceLockBadge) - same arm-then-fire as every other button here.
+    private bool _lockBadgeArmed;
+
+    private bool IsOverLockBadge(Point contentPoint) =>
+        FenceLocks.GetStatus(FolderFenceId) != FenceLockStatus.None
+        && FenceLockBadge.HitRect(LockBadgeRect(GetContentSize().Width)).Contains(contentPoint);
 
     /// <summary>Pen width/inset both scale off the glyph's own current rect (see EmptyStatePlusRect)
     /// rather than being fixed - a fixed 3px/6px pair sized for the old fixed 64px box read as

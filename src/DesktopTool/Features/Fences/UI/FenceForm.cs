@@ -2,6 +2,8 @@
 using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Runtime.InteropServices;
+using DesktopTool.Features.FenceLocker;
+using DesktopTool.Features.FenceLocker.UI;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.Fences.Native;
 using DesktopTool.Native;
@@ -290,6 +292,7 @@ internal sealed class FenceForm : LayeredWidgetForm
         _model = model;
         _manager = manager;
         _anchorStrategy = anchorStrategy;
+        FenceLocks.Changed += OnFenceLocksChanged;
 
         ExtraButtons = new List<ChromeButton>
         {
@@ -383,8 +386,16 @@ internal sealed class FenceForm : LayeredWidgetForm
     /// PaintItems before this call even returns - without IsDisposing already set, that repaint would
     /// use _iconCache's Icon objects just disposed a few lines down, which throws (Icon is an
     /// ObjectDisposedException-checked handle, same as Control.Handle).</summary>
+    // Repaints the header padlock when this fence is locked, unlocked, or its time window opens/closes.
+    private void OnFenceLocksChanged(object? sender, EventArgs e)
+    {
+        if (IsHandleCreated && !IsDisposed)
+            RenderAndPresent();
+    }
+
     protected override void DisposeOwnedResources()
     {
+        FenceLocks.Changed -= OnFenceLocksChanged;
         _itemRenameBox?.Dispose();
         _itemContextMenu?.Dispose();
         _dragGhost?.Dispose();
@@ -420,6 +431,10 @@ internal sealed class FenceForm : LayeredWidgetForm
     protected override void OnDragDrop(DragEventArgs e)
     {
         if (e.Data?.GetData(DataFormats.FileDrop) is not string[] paths)
+            return;
+
+        // Adding to (or converting) a locked fence is an edit - see FenceLocks.
+        if (!EnsureUnlocked())
             return;
 
         if (IsFolderConversionDrop(paths))
@@ -467,6 +482,12 @@ internal sealed class FenceForm : LayeredWidgetForm
 
         if (TryArmHeaderCloseButton(contentPoint))
             return;
+
+        if (IsOverLockBadge(contentPoint))
+        {
+            _lockBadgeArmed = true;
+            return;
+        }
 
         if (ShowsButtons && GetSettingsButtonRect(contentSize.Width, onLeft).Contains(contentPoint))
         {
@@ -517,8 +538,18 @@ internal sealed class FenceForm : LayeredWidgetForm
             var dy = e.Y - _dragArmPoint.Y;
             if (dx * dx + dy * dy >= DragThreshold * DragThreshold)
             {
-                _draggingIndex = armIndex;
                 _dragArmIndex = null;
+                // A locked fence's items can't be dragged out (or moved/removed) - ask first, and
+                // don't start this drag either way; it can be retried once unlocked.
+                if (FenceLocks.GetStatus(FenceId) == FenceLockStatus.Locked)
+                {
+                    EnsureUnlocked();
+                    return;
+                }
+                if (!EnsureUnlocked())
+                    return;
+
+                _draggingIndex = armIndex;
                 Capture = true;
 
                 var item = _model.Files[armIndex];
@@ -591,6 +622,15 @@ internal sealed class FenceForm : LayeredWidgetForm
 
         FireArmedHeaderCloseButton(ToContent(e.Location));
 
+        if (_lockBadgeArmed)
+        {
+            _lockBadgeArmed = false;
+            if (IsOverLockBadge(ToContent(e.Location)))
+                BeginInvoke(() => FenceLockBadge.HandleClick(FenceId, _model.Name, this,
+                    RectangleToScreen(ToWindow(LockBadgeRect(GetContentSize().Width)))));
+            return;
+        }
+
         if (_settingsButtonArmed)
         {
             _settingsButtonArmed = false;
@@ -638,6 +678,12 @@ internal sealed class FenceForm : LayeredWidgetForm
             var screenPoint = PointToScreen(e.Location);
             if (_manager.FindFenceAt(screenPoint, FenceId) is { } targetForm)
             {
+                // Dropping onto another fence edits that fence too - its own lock gets a say.
+                if (!FenceLocks.EnsureUnlocked(targetForm.FenceId, targetForm.FenceName, this))
+                {
+                    RenderAndPresent();
+                    return;
+                }
                 var targetIndex = targetForm.IndexForExternalDrop(screenPoint);
                 if (!isSourceTrash && _manager.IsRecycleBinAt(targetForm.FenceId, targetIndex))
                     _manager.DeleteFencedItem(FenceId, path, Handle);
@@ -784,8 +830,8 @@ internal sealed class FenceForm : LayeredWidgetForm
             return HTCLIENT;
 
         // Not gated by ShowsButtons, unlike every check above - see IsOverHeaderCloseButton's own
-        // comment.
-        if (IsOverHeaderCloseButton(contentPoint))
+        // comment. The padlock is clickable the same way, header or not.
+        if (IsOverHeaderCloseButton(contentPoint) || IsOverLockBadge(contentPoint))
             return HTCLIENT;
 
         if (ShowsButtons)
@@ -839,7 +885,27 @@ internal sealed class FenceForm : LayeredWidgetForm
         // item grid (see PaintItems).
         PaintChrome(g, contentWidth, contentHeight);
         PaintItems(g, contentWidth, contentHeight);
+        PaintLockBadge(g, contentWidth);
     }
+
+    /// <summary>A padlock in the header while this fence has a lock - closed when locked, open when
+    /// it's open right now (see FenceLockBadge).</summary>
+    private void PaintLockBadge(Graphics g, int contentWidth)
+    {
+        g.ResetClip();
+        FenceLockBadge.Paint(g, ToWindow(LockBadgeRect(contentWidth)), FenceLocks.GetStatus(FenceId));
+    }
+
+    private Rectangle LockBadgeRect(int contentWidth) =>
+        FenceLockBadge.Rect(contentWidth, TitleRowHeight, ShowHeaderCloseButton ? HeaderCloseButtonSize : 0, TitleVisible);
+
+    // Arm-then-fire, like every other button here: clicking the padlock unlocks a locked fence (the
+    // only way in for one with nothing in it) or locks one unlocked this session (see FenceLockBadge).
+    private bool _lockBadgeArmed;
+
+    private bool IsOverLockBadge(Point contentPoint) =>
+        FenceLocks.GetStatus(FenceId) != FenceLockStatus.None
+        && FenceLockBadge.HitRect(LockBadgeRect(GetContentSize().Width)).Contains(contentPoint);
 
     /// <summary>Delete Fence's own glyph (see ExtraButtons) - the "x" glyph itself already reads as
     /// destructive without needing a separate warning color too, same reasoning as this fence's own
@@ -1212,7 +1278,7 @@ internal sealed class FenceForm : LayeredWidgetForm
 
     private void OpenItem(string? path)
     {
-        if (path is null)
+        if (path is null || !EnsureUnlocked())
             return;
 
         try
@@ -1303,7 +1369,7 @@ internal sealed class FenceForm : LayeredWidgetForm
 
     private void BeginRenameItem(string? path)
     {
-        if (path is null || _itemRenameBox is not null)
+        if (path is null || _itemRenameBox is not null || !EnsureUnlocked())
             return;
 
         var index = _model.Files.FindIndex(f => f.Path == path);
@@ -1360,12 +1426,29 @@ internal sealed class FenceForm : LayeredWidgetForm
 
     private void ConfirmDelete()
     {
+        if (!EnsureUnlocked())
+            return;
+
         var result = MessageBox.Show(this,
             $"Delete fence \"{_model.Name}\"? The files inside it won't be deleted.",
             "Delete Fence", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
 
         if (result == DialogResult.Yes)
+        {
             _manager.DeleteFence(FenceId);
+            FenceLocks.RemoveLock(FenceId);
+        }
+    }
+
+    /// <summary>The fence lock gate (see FenceLocks) - true when nothing is stopping the action.</summary>
+    private bool EnsureUnlocked() => FenceLocks.EnsureUnlocked(FenceId, _model.Name, this);
+
+    /// <summary>Renaming a locked fence asks for the lock first (title double-click and right-click →
+    /// Rename both come through here).</summary>
+    protected override void BeginRename()
+    {
+        if (EnsureUnlocked())
+            base.BeginRename();
     }
 
     /// <summary>Routes the header close button (see ShowHeaderCloseButton/LayeredWidgetForm's own

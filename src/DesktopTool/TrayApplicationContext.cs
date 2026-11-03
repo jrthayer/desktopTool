@@ -1,3 +1,5 @@
+using DesktopTool.Features.FenceLocker;
+using DesktopTool.Features.FenceLocker.UI;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.FolderFences;
 using DesktopTool.Features.JunkDrawer;
@@ -27,6 +29,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly WidgetManagerStore _widgetManagerStore = new();
     private readonly WallpaperWidgetStore _wallpaperWidgetStore = new();
     private readonly JunkDrawerStore _junkDrawerStore = new();
+    private readonly FenceLockerStore _fenceLockerStore = new();
 
     // Applies each monitor's chosen background and runs the per-monitor slideshow timer - see
     // WallpaperService. Owned here rather than by the widget, so slideshows keep advancing while the
@@ -62,11 +65,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly JunkDrawerWidget _junkDrawer;
 
     // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
+    // Widget Manager's own Fence Locker row. The locks themselves are FenceLocks (started first thing
+    // in the constructor, so fences can check them as soon as they exist).
+    private readonly FenceLockerWidget _fenceLocker;
+
+    // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
     // the tray's own top-level "Widget Manager" item rather than opened fresh each time.
     private readonly WidgetManagerWidget _widgetManager;
 
     public TrayApplicationContext()
     {
+        FenceLocks.Initialize();
         _folderFenceManager = new FolderFenceManager(_fenceManager);
         // Dropping a single folder onto an empty fence converts it into a folder fence instead of
         // adding the folder as an ordinary shortcut - see FenceForm.FolderDroppedOnEmptyFence's own
@@ -91,10 +100,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
         var junkDrawerModel = _junkDrawerStore.Load();
         _junkDrawer = new JunkDrawerWidget(_fenceManager, junkDrawerModel, _junkDrawerStore);
 
-        // Needs _layoutLauncher/_wallpapers/_junkDrawer to already exist - their own rows read/toggle
-        // those widgets' Visible directly rather than through a separate manager class.
+        var fenceLockerModel = _fenceLockerStore.Load();
+        _fenceLocker = new FenceLockerWidget(_fenceManager, fenceLockerModel, _fenceLockerStore);
+
+        // Needs _layoutLauncher/_wallpapers/_junkDrawer/_fenceLocker to already exist - their own rows
+        // read/toggle those widgets' Visible directly rather than through a separate manager class.
         var widgetManagerModel = _widgetManagerStore.Load();
-        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _wallpapers, _junkDrawer, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
+        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _wallpapers, _junkDrawer, _fenceLocker, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
         _widgetManager.EditLayoutsRequested += (_, _) => OpenLayoutEditor(null);
         _widgetManager.HelpRequested += (_, _) => OpenReadme(null);
         // Every other widget's own Help button - opens the Readme on that widget's entry.
@@ -171,6 +183,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _wallpapers.Show();
         if (junkDrawerModel.Visible)
             _junkDrawer.Show();
+        if (fenceLockerModel.Visible)
+            _fenceLocker.Show();
         if (widgetManagerModel.Visible)
             _widgetManager.Show();
 
@@ -179,6 +193,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // doc comment for why that leaves them showing stale "Off" without this.
         _widgetManager.RefreshRowStates();
         _junkDrawer.RefreshRowStates();
+        // Its fence list comes from the live fences, which only exist after LoadAndShowAll above.
+        _fenceLocker.RefreshRowStates();
     }
 
     // CheckOnClick already flipped the item's own Checked before this fires - just persist
@@ -245,6 +261,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _layoutLauncher.Shutdown();
         _wallpapers.Shutdown();
         _junkDrawer.Shutdown();
+        _fenceLocker.Shutdown();
+        FenceLocks.Shutdown();
         _wallpaperService.Dispose();
         _widgetManager.Shutdown();
         _fenceManager.Dispose();
