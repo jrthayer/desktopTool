@@ -153,7 +153,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         _layoutLauncher.VisibilityChanged += (_, _) => RefreshRowStates();
         _wallpapers.VisibilityChanged += (_, _) => RefreshRowStates();
         _junkDrawer.VisibilityChanged += (_, _) => RefreshRowStates();
-        // The Fences row's switch, when Show/Hide All runs from the tray or the Junk Drawer instead.
+        // The Fences row's switch, whenever fences are shown or hidden in bulk from somewhere else.
         Fences.VisibilityChanged += (_, _) => RefreshRowStates();
         _folderFences.VisibilityChanged += (_, _) => RefreshRowStates();
 

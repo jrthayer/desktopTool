@@ -99,10 +99,12 @@ its code lives under [`src/DesktopTool/Features/Wallpapers`](src/DesktopTool/Fea
 ### Junk Drawer
 
 The **Junk Drawer** widget holds small system-level tools, each a row with an
-on/off switch: **Show All Fences** (the same as the tray's Show/Hide All),
-**Show Hidden Files**, and **Start with Windows**. The tray menu keeps its own
-copy of each, and every copy stays in sync. Toggled via its own row on the
-[Widget Manager](#widget-manager) widget.
+on/off switch: **Show Hidden Files**, **Start with Windows** (the tray menu
+keeps a copy of both, and they stay in sync), and **Hide with Double Click**.
+Its **Hide Desktop** button hides every Desktop Tool widget at once; the tray's
+**Show Desktop** brings them back. With Hide with Double Click on,
+double-clicking empty desktop hides and shows them too. Toggled via its own
+row on the [Widget Manager](#widget-manager) widget.
 
 See [`src/DesktopTool/Features/JunkDrawer/README.md`](src/DesktopTool/Features/JunkDrawer/README.md)
 for details. All of its code lives under
@@ -136,8 +138,10 @@ All of its code lives under [`src/DesktopTool/UI`](src/DesktopTool/UI).
   above) — creating a fence, editing snap lines, and showing/hiding the
   Layout Launcher all live on its own rows instead now. Toggles the Widget
   Manager widget itself.
-- **Show/Hide All** — toggles every fence's visibility at once; also
-  triggered by double-clicking the tray icon.
+- **Show Desktop** — brings back every widget the Junk Drawer's
+  **Hide Desktop** button (or a desktop double-click) hid. Greyed out unless
+  the desktop is currently hidden. Double-clicking the tray icon hides or
+  shows the desktop.
 - **Start with Windows** — adds (or removes) Desktop Tool from your user's
   Run key so it launches automatically at sign-in. The checkbox always
   reflects the Run key's actual current state, even if changed by hand.

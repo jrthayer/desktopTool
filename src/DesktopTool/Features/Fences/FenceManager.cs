@@ -258,9 +258,8 @@ public sealed class FenceManager : IDisposable
 
     /// <summary>Whether at least one fence is currently shown - read fresh from every live form's
     /// own Visible rather than cached, the same "scan live state, never track a shadow flag"
-    /// reasoning as HasRecycleBin above. Lets Show/Hide All (tray, and Widget Manager's own Fences
-    /// switch) always flip off the actual current state instead of two independent callers each
-    /// keeping their own possibly-stale toggle bit.</summary>
+    /// reasoning as HasRecycleBin above. Lets Widget Manager's own Fences switch always flip off the
+    /// actual current state instead of keeping its own possibly-stale toggle bit.</summary>
     public bool AnyVisible => _forms.Values.Any(f => f.Visible);
 
     public bool IsRecycleBinAt(Guid fenceId, int index)
@@ -490,9 +489,13 @@ public sealed class FenceManager : IDisposable
         VisibilityChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>Raised after SetAllVisible (Show/Hide All from the tray, Widget Manager's Fences row,
-    /// or the Junk Drawer), so every switch showing whether fences are visible can repaint.</summary>
+    /// <summary>Raised after SetAllVisible (Widget Manager's Fences row), so every switch showing
+    /// whether fences are visible can repaint.</summary>
     public event EventHandler? VisibilityChanged;
+
+    /// <summary>Whether screenPoint is empty desktop - no fence or other window over it, and no
+    /// desktop icon under it (see DesktopListView.IsEmptyDesktopAt).</summary>
+    internal bool IsEmptyDesktopAt(Point screenPoint) => _desktopListView.IsEmptyDesktopAt(screenPoint);
 
     /// <summary>Re-extracts the trash cell's icon on whichever fence holds the Recycle Bin item, so
     /// it tracks the bin filling and emptying (RecycleBinChangeWatcher fires this for changes made

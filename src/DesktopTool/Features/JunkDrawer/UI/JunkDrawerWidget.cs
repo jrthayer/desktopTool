@@ -1,17 +1,18 @@
 using System.Drawing.Text;
 using DesktopTool.Features.Fences;
-using DesktopTool.Features.FolderFences;
 using DesktopTool.Native;
 using DesktopTool.UI;
 
 namespace DesktopTool.Features.JunkDrawer.UI;
 
 /// <summary>
-/// "Junk Drawer" widget - a home for small system-level tools that don't belong to any one feature:
-/// Show All Fences (the tray's Show/Hide All), Show Hidden Files and Start with Windows, each a row
-/// with an on/off switch. Clicking anywhere on a row flips it. The tray menu keeps its own copy of
-/// each; every copy repaints when another changes the setting (see the Changed/VisibilityChanged
-/// subscriptions below). Same chrome, row-click and tooltip plumbing as WidgetManagerWidget.
+/// "Junk Drawer" widget - a home for small system-level tools that don't belong to any one feature.
+/// On/off rows (Show Hidden Files, Start with Windows, Hide with Double Click - clicking anywhere on
+/// a row flips it) and a Hide Desktop button pinned to the bottom, which hides every DesktopTool
+/// widget, this one included (see DesktopHider; the tray's Show Desktop brings them back). The tray
+/// menu keeps its own copy of the first two settings; every copy repaints when another changes them
+/// (see the Changed subscriptions below). Same chrome, row-click and tooltip plumbing as
+/// WidgetManagerWidget.
 /// </summary>
 internal sealed class JunkDrawerWidget : LayeredWidgetForm
 {
@@ -25,11 +26,18 @@ internal sealed class JunkDrawerWidget : LayeredWidgetForm
     private const int ListRowHeightConst = 30;
     private const int SwitchRightPadding = 4;
 
+    // The Hide Desktop button, pinned to the bottom of the body - same arrangement as Layout
+    // Launcher's Manage Layouts.../Save Current Layout row (see its GetContentButtons).
+    private const int BottomRowHeight = 26;
+    private const int BottomRowGap = 8;
+    private const int BottomRowBottomPadding = 12;
+    private static readonly int[] BottomRowWidths = { 130 };
+
     /// <summary>One tool. Adding another is one more entry in the constructor's Tools list.</summary>
     private readonly record struct Tool(string Label, Func<bool> IsOn, Action Toggle);
 
     private readonly IReadOnlyList<Tool> _tools;
-    private readonly FolderFenceManager _folderFences;
+    private readonly DesktopDoubleClickWatcher _doubleClickWatcher;
     private readonly JunkDrawerModel _model;
     private readonly JunkDrawerStore _store;
     private readonly PaintedTooltip _rowTooltip = new();
@@ -50,25 +58,34 @@ internal sealed class JunkDrawerWidget : LayeredWidgetForm
     protected override IWidgetStyle Style => _model;
     protected override string HelpEntry => "Junk Drawer";
 
-    private int DefaultBodyHeight => HeaderHeight + ListVerticalPadding * 2 + _tools.Count * ListRowHeightConst;
+    private int DefaultBodyHeight => HeaderHeight + ListVerticalPadding * 2 + _tools.Count * ListRowHeightConst
+        + BottomRowGap + BottomRowHeight + BottomRowBottomPadding;
 
-    public JunkDrawerWidget(FenceManager fenceManager, FolderFenceManager folderFences, JunkDrawerModel model, JunkDrawerStore store)
+    public JunkDrawerWidget(FenceManager fenceManager, JunkDrawerModel model, JunkDrawerStore store)
         : base(model.Opacity / 100f, fenceManager)
     {
-        _folderFences = folderFences;
         // Before _model: CreateParams' default height reads the tool count, and only checks _model.
         _tools = new List<Tool>
         {
-            new("Show All Fences", () => Fences.AnyVisible || _folderFences.AnyVisible, ToggleAllFences),
             new("Show Hidden Files", () => HiddenFilesManager.IsEnabled, () => HiddenFilesManager.SetEnabled(!HiddenFilesManager.IsEnabled)),
             new("Start with Windows", () => StartupManager.IsEnabled, () => StartupManager.SetEnabled(!StartupManager.IsEnabled)),
+            new("Hide with Double Click", () => _model!.HideOnDoubleClick, ToggleHideOnDoubleClick),
         };
         _model = model;
         _store = store;
 
-        // Repaint whenever another copy of a switch (tray menu, Widget Manager's Fences row) changes it.
-        Fences.VisibilityChanged += OnToolStateChanged;
-        _folderFences.VisibilityChanged += OnToolStateChanged;
+        // A height saved before the Hide Desktop button existed would squeeze the rows under it -
+        // grow to fit everything before the window is first created (CreateParams reads it).
+        if (_model.Height is { } savedHeight && savedHeight < DefaultBodyHeight)
+        {
+            _model.Height = DefaultBodyHeight;
+            Persist();
+        }
+
+        _doubleClickWatcher = new DesktopDoubleClickWatcher(fenceManager);
+        _doubleClickWatcher.SetEnabled(_model.HideOnDoubleClick);
+
+        // Repaint whenever another copy of a switch (the tray menu's) changes it.
         HiddenFilesManager.Changed += OnToolStateChanged;
         StartupManager.Changed += OnToolStateChanged;
 
@@ -85,13 +102,19 @@ internal sealed class JunkDrawerWidget : LayeredWidgetForm
         RenderAndPresent();
     }
 
-    /// <summary>Same as the tray's Show/Hide All: shows everything if nothing is showing, otherwise
-    /// hides everything - fences and folder fences together.</summary>
-    private void ToggleAllFences()
+    private void ToggleHideOnDoubleClick()
     {
-        var visible = !(Fences.AnyVisible || _folderFences.AnyVisible);
-        Fences.SetAllVisible(visible);
-        _folderFences.SetAllVisible(visible);
+        _model.HideOnDoubleClick = !_model.HideOnDoubleClick;
+        Persist();
+        _doubleClickWatcher.SetEnabled(_model.HideOnDoubleClick);
+    }
+
+    /// <summary>Hide Desktop, pinned to the bottom of the body (see GetListArea, which stops above it).</summary>
+    protected override IReadOnlyList<ContentButton> GetContentButtons(int contentWidth, int contentHeight)
+    {
+        var top = contentHeight - BottomRowBottomPadding - RowHeight(contentWidth, BottomRowHeight, BottomRowGap, BottomRowWidths);
+        var rects = LayoutRow(contentWidth, top, BottomRowHeight, BottomRowGap, BottomRowWidths);
+        return new[] { new ContentButton("Hide Desktop", rects[0], DesktopHider.Hide) };
     }
 
     private void OnToolStateChanged(object? sender, EventArgs e)
@@ -173,10 +196,9 @@ internal sealed class JunkDrawerWidget : LayeredWidgetForm
 
     protected override void DisposeOwnedResources()
     {
-        Fences.VisibilityChanged -= OnToolStateChanged;
-        _folderFences.VisibilityChanged -= OnToolStateChanged;
         HiddenFilesManager.Changed -= OnToolStateChanged;
         StartupManager.Changed -= OnToolStateChanged;
+        _doubleClickWatcher.Dispose();
     }
 
     protected override Rectangle GetCurrentBody() => new(
@@ -262,6 +284,8 @@ internal sealed class JunkDrawerWidget : LayeredWidgetForm
         }
         if (ShowsButtons && TryArmExtraButton(contentPoint))
             return;
+        if (TryArmContentButton(contentPoint))
+            return;
         if (TryHandleListMouseDown(contentPoint))
             return;
 
@@ -319,6 +343,7 @@ internal sealed class JunkDrawerWidget : LayeredWidgetForm
         }
 
         FireArmedExtraButton(contentPoint);
+        FireArmedContentButton(contentPoint);
         EndListScrollDrag();
 
         if (_armedRowIndex >= 0)
@@ -338,10 +363,12 @@ internal sealed class JunkDrawerWidget : LayeredWidgetForm
 
     // ---- Rows ----
 
+    /// <summary>Between the header and the Hide Desktop button.</summary>
     protected override Rectangle GetListArea(int contentWidth, int contentHeight)
     {
         var top = (_model.HideHeader ? 0 : HeaderHeight) + ListVerticalPadding;
-        var height = Math.Max(ListRowHeight, contentHeight - top - ListVerticalPadding);
+        var buttonRow = BottomRowGap + BottomRowBottomPadding + RowHeight(contentWidth, BottomRowHeight, BottomRowGap, BottomRowWidths);
+        var height = Math.Max(ListRowHeight, contentHeight - top - ListVerticalPadding - buttonRow);
         return new Rectangle(ListHorizontalPadding, top, contentWidth - ListHorizontalPadding * 2, height);
     }
 

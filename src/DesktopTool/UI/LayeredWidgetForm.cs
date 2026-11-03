@@ -1780,7 +1780,7 @@ internal abstract class LayeredWidgetForm : Form
     /// SnapMove/SnapResize. This widget's own SnapMargin (not each candidate's own) applies, like a
     /// CSS margin: every other widget's edge also contributes a second candidate offset outward by
     /// that amount alongside the flush one - SnapEngine's own nearest-candidate-wins logic picks
-    /// whichever of the two is actually closest. A hidden widget ("Show/Hide All", or turned off in
+    /// whichever of the two is actually closest. A hidden widget (Hide Desktop, or turned off in
     /// Widget Manager) is skipped - checked via IsWindowVisible on the raw handle rather than WinForms'
     /// Visible, since fences hide through ShowWindow(SW_HIDE) directly. GetSnapTargetBody() is read fresh per candidate (not
     /// cached anywhere) so a widget still mid-drag itself contributes its own latest position. Empty

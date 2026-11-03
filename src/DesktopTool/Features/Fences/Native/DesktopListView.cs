@@ -307,6 +307,64 @@ public sealed class DesktopListView : IDisposable
     private Point GetListViewOrigin() =>
         NativeMethods.GetWindowRect(_hListView, out var rect) ? new Point(rect.Left, rect.Top) : Point.Empty;
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LVHITTESTINFO
+    {
+        public POINT pt;
+        public uint flags;
+        public int iItem;
+        public int iSubItem;
+        public int iGroup;
+    }
+
+    private const uint LVM_HITTEST = NativeMethods.LVM_FIRST + 18;
+
+    /// <summary>Whether screenPoint lands on the desktop itself with no icon under it - the window
+    /// there must be the desktop's own icon list (so a fence or any other window covering that spot
+    /// rules it out), and an LVM_HITTEST at that point must find no item. Used by the Junk Drawer's
+    /// "Hide with Double Click", so double-clicking an icon still just opens it. False whenever it
+    /// can't tell (Explorer restarting, access denied).</summary>
+    public bool IsEmptyDesktopAt(Point screenPoint)
+    {
+        if (!EnsureDiscovered())
+            return false;
+        if (NativeMethods.WindowFromPoint(new POINT { X = screenPoint.X, Y = screenPoint.Y }) != _hListView)
+            return false;
+
+        var hProcess = NativeMethods.OpenProcess(
+            NativeMethods.PROCESS_VM_OPERATION | NativeMethods.PROCESS_VM_READ | NativeMethods.PROCESS_VM_WRITE | NativeMethods.PROCESS_QUERY_INFORMATION,
+            false, _listViewProcessId);
+        if (hProcess == IntPtr.Zero)
+        {
+            NotifyOpenProcessFailed();
+            return false;
+        }
+
+        var size = Marshal.SizeOf<LVHITTESTINFO>();
+        var remote = IntPtr.Zero;
+        try
+        {
+            remote = NativeMethods.VirtualAllocEx(hProcess, IntPtr.Zero, (uint)size,
+                NativeMethods.MEM_COMMIT | NativeMethods.MEM_RESERVE, NativeMethods.PAGE_READWRITE);
+            if (remote == IntPtr.Zero)
+                return false;
+
+            var origin = GetListViewOrigin();
+            var info = new LVHITTESTINFO { pt = new POINT { X = screenPoint.X - origin.X, Y = screenPoint.Y - origin.Y } };
+            if (!NativeMethods.WriteProcessMemory(hProcess, remote, StructToBytes(info, size), (uint)size, out _))
+                return false;
+
+            var item = NativeMethods.SendMessage(_hListView, LVM_HITTEST, IntPtr.Zero, remote).ToInt32();
+            return item < 0;
+        }
+        finally
+        {
+            if (remote != IntPtr.Zero)
+                NativeMethods.VirtualFreeEx(hProcess, remote, 0, NativeMethods.MEM_RELEASE);
+            NativeMethods.CloseHandle(hProcess);
+        }
+    }
+
     private string ReadItemText(IntPtr hProcess, int index, IntPtr remoteLvItem, IntPtr remoteText,
         int textBufferChars, int lvItemSize)
     {

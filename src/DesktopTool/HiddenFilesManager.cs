@@ -37,7 +37,12 @@ internal static class HiddenFilesManager
     /// already-open File Explorer window - instead of only after an F5 in each. Writing the registry
     /// value alone changes the setting but not what's on screen; the steps after it are what make
     /// Explorer act on it (checked on Windows 11: the desktop's hidden hiddenDesktop folder appears
-    /// and disappears, and an open Explorer window updates, with no manual refresh).</summary>
+    /// and disappears, and an open Explorer window updates, with no manual refresh).
+    ///
+    /// The setting itself changes before this returns. Telling everyone about it happens on a
+    /// background thread (see NotifyAndRefresh): the WM_SETTINGCHANGE broadcast waits on every open
+    /// window on the system, up to a second each, so one busy app could otherwise freeze Desktop
+    /// Tool (and, through the Junk Drawer's mouse hook, the mouse) for several seconds.</summary>
     public static void SetEnabled(bool enabled)
     {
         using (var key = Registry.CurrentUser.OpenSubKey(AdvancedKeyPath, writable: true)
@@ -51,6 +56,19 @@ internal static class HiddenFilesManager
         var state = new SHELLSTATE { Flags1 = enabled ? FShowAllObjects : 0 };
         SHGetSetSettings(ref state, SSF_SHOWALLOBJECTS, true);
 
+        Changed?.Invoke(null, EventArgs.Empty);
+
+        // STA because Shell.Application (RefreshExplorerWindows) is an apartment-threaded COM object.
+        var worker = new Thread(NotifyAndRefresh) { IsBackground = true, Name = "Show Hidden Files refresh" };
+        worker.SetApartmentState(ApartmentState.STA);
+        worker.Start();
+    }
+
+    /// <summary>Everything that makes Explorer redraw with the new setting - run off the UI thread
+    /// (see SetEnabled). Each step reads nothing but the now-current shell state, so two quick
+    /// toggles in a row can't leave the screen showing the wrong one.</summary>
+    private static void NotifyAndRefresh()
+    {
         // What Folder Options itself sends after changing this - tells every Explorer view the shell
         // state changed. The SHChangeNotify broadcast alone (all this used to send) wasn't enough.
         SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, IntPtr.Zero, "ShellState", SMTO_ABORTIFHUNG, 1000, out _);
@@ -58,7 +76,6 @@ internal static class HiddenFilesManager
 
         RefreshExplorerWindows();
         RefreshDesktop();
-        Changed?.Invoke(null, EventArgs.Empty);
     }
 
     /// <summary>Refresh() on every open File Explorer window, found through the Shell.Application

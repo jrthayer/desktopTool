@@ -56,8 +56,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly WallpaperWidget _wallpapers;
 
     // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
-    // Widget Manager's own Junk Drawer row. Holds the same Show/Hide All, Show Hidden Files and Start
-    // with Windows switches the tray menu below keeps copies of.
+    // Widget Manager's own Junk Drawer row. Holds the same Show Hidden Files and Start with Windows
+    // switches the tray menu below keeps copies of, plus Hide Desktop (undone by the tray's Show
+    // Desktop).
     private readonly JunkDrawerWidget _junkDrawer;
 
     // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
@@ -88,7 +89,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _wallpaperService.Start();
 
         var junkDrawerModel = _junkDrawerStore.Load();
-        _junkDrawer = new JunkDrawerWidget(_fenceManager, _folderFenceManager, junkDrawerModel, _junkDrawerStore);
+        _junkDrawer = new JunkDrawerWidget(_fenceManager, junkDrawerModel, _junkDrawerStore);
 
         // Needs _layoutLauncher/_wallpapers/_junkDrawer to already exist - their own rows read/toggle
         // those widgets' Visible directly rather than through a separate manager class.
@@ -123,7 +124,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
         widgetManagerItem.Click += (_, _) => _widgetManager.ToggleVisible();
         menu.Opening += (_, _) => widgetManagerItem.Checked = _widgetManager.Visible;
         menu.Items.Add(widgetManagerItem);
-        menu.Items.Add("Show/Hide All", null, OnShowHideAll);
+        // Brings back every widget the Junk Drawer's Hide Desktop (or a desktop double-click) hid -
+        // greyed out unless that's currently in effect.
+        var showDesktopItem = new ToolStripMenuItem("Show Desktop");
+        showDesktopItem.Click += (_, _) => DesktopHider.Show();
+        menu.Opening += (_, _) => showDesktopItem.Enabled = DesktopHider.IsHidden;
+        menu.Items.Add(showDesktopItem);
         menu.Items.Add(new ToolStripSeparator());
         // Checked reflects the registry Run key's actual current state (see StartupManager) rather
         // than a separately-persisted flag - read fresh every time the menu opens so an external
@@ -150,7 +156,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ContextMenuStrip = menu,
             Visible = true,
         };
-        _trayIcon.DoubleClick += OnShowHideAll;
+        // Hides or shows every widget at once - the same as Hide Desktop / Show Desktop.
+        _trayIcon.DoubleClick += (_, _) => DesktopHider.Toggle();
 
         _fenceManager.LoadAndShowAll();
         _folderFenceManager.LoadAndShowAll();
@@ -226,13 +233,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _readmeForm = entryTitle is null ? new ReadmeWidget(_fenceManager) : new ReadmeWidget(_fenceManager, entryTitle);
         _readmeForm.FormClosed += (_, _) => _readmeForm = null;
         _readmeForm.Show();
-    }
-
-    private void OnShowHideAll(object? sender, EventArgs e)
-    {
-        var visible = !(_fenceManager.AnyVisible || _folderFenceManager.AnyVisible);
-        _fenceManager.SetAllVisible(visible);
-        _folderFenceManager.SetAllVisible(visible);
     }
 
     private void OnExit(object? sender, EventArgs e)

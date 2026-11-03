@@ -117,11 +117,12 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
             "Settings menu. Slideshows only advance while Desktop Tool is running. Widget " +
             "Manager's own switch shows or hides the widget."),
         new("Junk Drawer",
-            "Small system-level tools, each with an on/off switch: Show All Fences (the same as " +
-            "the tray's Show/Hide All), Show Hidden Files (takes effect straight away on the " +
-            "desktop and in open Explorer windows), and Start with Windows. Click a row to flip " +
-            "it. The tray menu keeps its own copy of each, and they all stay in sync. Widget " +
-            "Manager's own switch shows or hides the widget."),
+            "Small system-level tools. Switches (click a row to flip it): Show Hidden Files " +
+            "(takes effect straight away on the desktop and in open Explorer windows), Start with " +
+            "Windows, and Hide with Double Click (double-clicking empty desktop hides and shows " +
+            "the desktop). The Hide Desktop button hides every Desktop Tool widget, this one " +
+            "included - bring them back with Show Desktop in the tray menu, or by double-clicking " +
+            "the tray icon. Widget Manager's own switch shows or hides the widget."),
     };
 
     private const string GitHubFeaturesUrl = "https://github.com/jrthayer/desktopTool/blob/master/src/DesktopTool/Features/";

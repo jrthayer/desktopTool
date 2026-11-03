@@ -18,6 +18,10 @@ public sealed class JunkDrawerModel : WidgetStyleModel
     public string Title { get; set; } = "Junk Drawer";
 
     public bool Visible { get; set; } = true;
+
+    /// <summary>"Hide with Double Click": double-clicking empty desktop toggles Hide Desktop (see
+    /// DesktopDoubleClickWatcher). Off by default.</summary>
+    public bool HideOnDoubleClick { get; set; }
 }
 
 /// <summary>Same shape as LayoutLauncherStore, for the single JunkDrawerModel.</summary>

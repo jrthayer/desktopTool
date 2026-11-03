@@ -4,10 +4,10 @@ Desktop Tool's original feature: draggable, resizable, translucent "fence"
 regions (Stardock Fences-style) that group desktop icons. All of this
 feature's code lives under this folder — `Fences/` for the model/manager
 layer, `Fences/UI/` for its windows and controls, `Fences/Native/` for the
-Win32 interop it's built on. Entry points into it (Show/Hide All and Add
-Recycle Bin in the tray menu; everything else - creating a fence, editing
-snap lines - lives on [Widget Manager](../WidgetManager/README.md)'s own
-rows instead) live in the app-wide [`TrayApplicationContext`](../../TrayApplicationContext.cs)
+Win32 interop it's built on. Entry points into it (creating a fence, showing
+or hiding all fences, editing snap lines, the Fence Trash Can - all on
+[Widget Manager](../WidgetManager/README.md)'s own rows) are wired up in the
+app-wide [`TrayApplicationContext`](../../TrayApplicationContext.cs)
 — see the base [README](../../../../README.md) for those.
 
 ## Fences

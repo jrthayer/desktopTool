@@ -18,10 +18,9 @@ Widget Manager's three rows are fixed - nothing adds or removes one, unlike the 
 own saved-layout list. Each row has a label, an on/off switch (a small hand-drawn pill, since
 there's no toggle-switch control elsewhere in the app to reuse), and its own action button:
 
-- **Fences** - the switch shows/hides every fence at once (reads/flips `FenceManager.AnyVisible`,
-  the same source of truth the tray's own **Show/Hide All** reads/flips, so the two can never drift
-  out of sync with each other or with a fence hidden/shown some other way). **Add Fence** creates a
-  new, empty fence.
+- **Fences** - the switch shows/hides every fence and folder fence at once (reads/flips
+  `FenceManager.AnyVisible`/`FolderFenceManager.AnyVisible`, the live state, so it can never drift
+  out of sync with a fence hidden/shown some other way). **Add Fence** creates a new, empty fence.
 - **Layout Launcher** - the switch shows/hides that widget (reads/flips its own `Visible`).
   **Edit Layouts** opens **Manage Layouts**, the same as that widget's own button.
 - **Snap Lines** - the switch turns every custom snap line (including the seeded default edge
@@ -34,8 +33,9 @@ there's no toggle-switch control elsewhere in the app to reuse), and its own act
 - **Junk Drawer** - the switch shows/hides the [Junk Drawer](../JunkDrawer/README.md) widget (reads/flips
   its own `Visible`). No action button.
 
-The Fences switch also updates by itself when Show/Hide All runs from the tray or the Junk Drawer
-(`FenceManager.VisibilityChanged`/`FolderFenceManager.VisibilityChanged`).
+The Fences switch also updates by itself whenever fences are shown or hidden in bulk
+(`FenceManager.VisibilityChanged`/`FolderFenceManager.VisibilityChanged`). The Junk Drawer's Hide
+Desktop is separate: it hides every widget, Widget Manager included, without changing this switch.
 
 ## Settings
 
