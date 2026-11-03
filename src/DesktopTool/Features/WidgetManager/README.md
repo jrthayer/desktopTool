@@ -31,16 +31,18 @@ there's no toggle-switch control elsewhere in the app to reuse), and its own act
   editing lines works regardless of the switch's state.
 - **Wallpapers** - the switch shows/hides the [Wallpapers](../Wallpapers/README.md) widget (reads/flips
   its own `Visible`). No action button. Hiding the widget doesn't stop slideshows; they keep running.
+- **Junk Drawer** - the switch shows/hides the [Junk Drawer](../JunkDrawer/README.md) widget (reads/flips
+  its own `Visible`). No action button.
+
+The Fences switch also updates by itself when Show/Hide All runs from the tray or the Junk Drawer
+(`FenceManager.VisibilityChanged`/`FolderFenceManager.VisibilityChanged`).
 
 ## Settings
 
 Beyond the Base flyout every widget on this base shares (see [UI](../../UI/README.md)'s own Style
-contract section), Widget Manager's Settings menu has an **Additional** flyout with two more
-system-level toggles - **Start with Windows** and **Show Hidden Files** - mirroring the tray menu's
-own copies of the same two settings. Both read the actual current state fresh every time the menu
-opens (`StartupManager.IsEnabled`/`HiddenFilesManager.IsEnabled`), the same "never shows stale"
-convention the tray's own items already use, so toggling one from here or from the tray can never
-leave the other showing the wrong state.
+contract section), Widget Manager's Settings menu has an **Additional** flyout with **Rows Shown**
+and **Always Max Rows**. **Start with Windows** and **Show Hidden Files** used to be here too; they've
+moved to the [Junk Drawer](../JunkDrawer/README.md) widget (and the tray menu still has them).
 
 ## Limitations
 

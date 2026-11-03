@@ -29,6 +29,10 @@ internal static class HiddenFilesManager
         }
     }
 
+    /// <summary>Raised after SetEnabled, so every switch showing this setting (the Junk Drawer's, say)
+    /// can repaint when another one changes it.</summary>
+    public static event EventHandler? Changed;
+
     /// <summary>Changes the setting and makes it show up straight away - on the desktop and in every
     /// already-open File Explorer window - instead of only after an F5 in each. Writing the registry
     /// value alone changes the setting but not what's on screen; the steps after it are what make
@@ -54,6 +58,7 @@ internal static class HiddenFilesManager
 
         RefreshExplorerWindows();
         RefreshDesktop();
+        Changed?.Invoke(null, EventArgs.Empty);
     }
 
     /// <summary>Refresh() on every open File Explorer window, found through the Shell.Application

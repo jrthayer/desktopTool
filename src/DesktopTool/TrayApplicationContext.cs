@@ -1,5 +1,7 @@
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.FolderFences;
+using DesktopTool.Features.JunkDrawer;
+using DesktopTool.Features.JunkDrawer.UI;
 using DesktopTool.Features.Layouts;
 using DesktopTool.Features.Layouts.UI;
 using DesktopTool.Features.Readme.UI;
@@ -24,6 +26,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly LayoutLauncherStore _layoutLauncherStore = new();
     private readonly WidgetManagerStore _widgetManagerStore = new();
     private readonly WallpaperWidgetStore _wallpaperWidgetStore = new();
+    private readonly JunkDrawerStore _junkDrawerStore = new();
 
     // Applies each monitor's chosen background and runs the per-monitor slideshow timer - see
     // WallpaperService. Owned here rather than by the widget, so slideshows keep advancing while the
@@ -53,6 +56,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly WallpaperWidget _wallpapers;
 
     // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
+    // Widget Manager's own Junk Drawer row. Holds the same Show/Hide All, Show Hidden Files and Start
+    // with Windows switches the tray menu below keeps copies of.
+    private readonly JunkDrawerWidget _junkDrawer;
+
+    // Same "created once up front, never recreated" reasoning as _layoutLauncher above - toggled via
     // the tray's own top-level "Widget Manager" item rather than opened fresh each time.
     private readonly WidgetManagerWidget _widgetManager;
 
@@ -79,10 +87,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _wallpapers = new WallpaperWidget(_wallpaperService, _fenceManager, wallpaperModel, _wallpaperWidgetStore);
         _wallpaperService.Start();
 
-        // Needs _layoutLauncher/_wallpapers to already exist - their own rows read/toggle those
-        // widgets' Visible directly rather than through a separate manager class.
+        var junkDrawerModel = _junkDrawerStore.Load();
+        _junkDrawer = new JunkDrawerWidget(_fenceManager, _folderFenceManager, junkDrawerModel, _junkDrawerStore);
+
+        // Needs _layoutLauncher/_wallpapers/_junkDrawer to already exist - their own rows read/toggle
+        // those widgets' Visible directly rather than through a separate manager class.
         var widgetManagerModel = _widgetManagerStore.Load();
-        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _wallpapers, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
+        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _wallpapers, _junkDrawer, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
         _widgetManager.EditLayoutsRequested += (_, _) => OpenLayoutEditor(null);
         _widgetManager.HelpRequested += (_, _) => OpenReadme(null);
         // Every other widget's own Help button - opens the Readme on that widget's entry.
@@ -151,6 +162,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _layoutLauncher.Show();
         if (wallpaperModel.Visible)
             _wallpapers.Show();
+        if (junkDrawerModel.Visible)
+            _junkDrawer.Show();
         if (widgetManagerModel.Visible)
             _widgetManager.Show();
 
@@ -158,6 +171,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // forced RenderAndPresent) before LoadAndShowAll/Show above ran - see RefreshRowStates' own
         // doc comment for why that leaves them showing stale "Off" without this.
         _widgetManager.RefreshRowStates();
+        _junkDrawer.RefreshRowStates();
     }
 
     // CheckOnClick already flipped the item's own Checked before this fires - just persist
@@ -230,6 +244,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _readmeForm?.Dispose();
         _layoutLauncher.Shutdown();
         _wallpapers.Shutdown();
+        _junkDrawer.Shutdown();
         _wallpaperService.Dispose();
         _widgetManager.Shutdown();
         _fenceManager.Dispose();

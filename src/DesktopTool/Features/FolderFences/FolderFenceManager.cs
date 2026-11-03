@@ -187,7 +187,11 @@ public sealed class FolderFenceManager : IDisposable
     {
         foreach (var form in _forms.Values)
             form.SetVisible(visible);
+        VisibilityChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    /// <summary>Raised after SetAllVisible - see FenceManager.VisibilityChanged.</summary>
+    public event EventHandler? VisibilityChanged;
 
     /// <summary>Real disposal for app shutdown (TrayApplicationContext.OnExit) - no restore-to-
     /// desktop step needed first, unlike FenceManager.Dispose, since a folder fence's items were

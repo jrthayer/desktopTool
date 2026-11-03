@@ -31,6 +31,10 @@ internal static class StartupManager
         }
     }
 
+    /// <summary>Raised after SetEnabled, so every switch showing this setting (the Junk Drawer's, say)
+    /// can repaint when another one changes it.</summary>
+    public static event EventHandler? Changed;
+
     /// <summary>Environment.ProcessPath is the real DesktopTool.exe apphost, not dotnet.exe - a
     /// framework-dependent net8.0-windows WinExe still gets its own native apphost by default, so
     /// this is safe to point the Run key straight at without needing "dotnet DesktopTool.dll".
@@ -57,5 +61,7 @@ internal static class StartupManager
         {
             key.DeleteValue(ValueName, throwOnMissingValue: false);
         }
+
+        Changed?.Invoke(null, EventArgs.Empty);
     }
 }

@@ -96,6 +96,18 @@ its code lives under [`src/DesktopTool/Features/Wallpapers`](src/DesktopTool/Fea
 - If a slideshow folder is moved or emptied, that monitor's tile shows a
   warning icon, and the slideshow tries again once per interval.
 
+### Junk Drawer
+
+The **Junk Drawer** widget holds small system-level tools, each a row with an
+on/off switch: **Show All Fences** (the same as the tray's Show/Hide All),
+**Show Hidden Files**, and **Start with Windows**. The tray menu keeps its own
+copy of each, and every copy stays in sync. Toggled via its own row on the
+[Widget Manager](#widget-manager) widget.
+
+See [`src/DesktopTool/Features/JunkDrawer/README.md`](src/DesktopTool/Features/JunkDrawer/README.md)
+for details. All of its code lives under
+[`src/DesktopTool/Features/JunkDrawer`](src/DesktopTool/Features/JunkDrawer).
+
 ### Snapping
 
 The pure edge-snapping geometry (`SnapEngine`) that gives both Fences and

@@ -487,7 +487,12 @@ public sealed class FenceManager : IDisposable
             form.SetVisible(visible);
         if (visible)
             PruneDeadItems();
+        VisibilityChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    /// <summary>Raised after SetAllVisible (Show/Hide All from the tray, Widget Manager's Fences row,
+    /// or the Junk Drawer), so every switch showing whether fences are visible can repaint.</summary>
+    public event EventHandler? VisibilityChanged;
 
     /// <summary>Re-extracts the trash cell's icon on whichever fence holds the Recycle Bin item, so
     /// it tracks the bin filling and emptying (RecycleBinChangeWatcher fires this for changes made

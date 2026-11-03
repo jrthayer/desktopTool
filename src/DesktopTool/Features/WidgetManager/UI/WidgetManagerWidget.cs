@@ -2,6 +2,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.FolderFences;
+using DesktopTool.Features.JunkDrawer.UI;
 using DesktopTool.Features.Layouts.UI;
 using DesktopTool.Features.Wallpapers.UI;
 using DesktopTool.Native;
@@ -13,7 +14,7 @@ namespace DesktopTool.Features.WidgetManager.UI;
 /// "Widget Manager" widget - a third, independent proof that LayeredWidgetForm's own chrome
 /// (move/resize/snap/rename/settings/theme/list) works for something that isn't a Fence or the
 /// Layout Launcher. Lists the app's toggleable widgets/switches - Fences, Layout Launcher, Snap
-/// Lines, Widget Snapping, Fence Trash Can, Wallpapers - each as a fixed row (never added to/removed from,
+/// Lines, Widget Snapping, Fence Trash Can, Wallpapers, Junk Drawer - each as a fixed row (never added to/removed from,
 /// unlike Layout Launcher's own saved-profile list) with an on/off switch and, for the three that
 /// have somewhere to go, a row-specific action button, so all of them can be reached without
 /// opening the tray menu. Everything not genuinely specific to this widget (theme derivation, the
@@ -30,7 +31,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private const int ButtonBandOverhang = 19;
     private const int TopMarginWithButtons = OuterMarginPx + ButtonBandOverhang;
 
-    private const int RowCountFixed = 6;
+    private const int RowCountFixed = 7;
     private const int ListVerticalPadding = 8;
     private const int ListHorizontalPadding = 10;
 
@@ -44,6 +45,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
 
     private readonly LayoutLauncherWidget _layoutLauncher;
     private readonly WallpaperWidget _wallpapers;
+    private readonly JunkDrawerWidget _junkDrawer;
     private readonly FolderFenceManager _folderFences;
     private readonly WidgetManagerModel _model;
     private readonly WidgetManagerStore _store;
@@ -80,6 +82,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         new("Widget Snapping", string.Empty, RowButtonIcon.None),
         new("Fence Trash Can", string.Empty, RowButtonIcon.None),
         new("Wallpapers", string.Empty, RowButtonIcon.None),
+        new("Junk Drawer", string.Empty, RowButtonIcon.None),
     };
 
     // Row click handling - clicking a row's own switch flips that widget's on/off state; its
@@ -124,20 +127,35 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// rows read from - WidgetManagerModel already implements IWidgetStyle.</summary>
     protected override IWidgetStyle Style => _model;
 
-    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, WallpaperWidget wallpapers, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
+    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, WallpaperWidget wallpapers, JunkDrawerWidget junkDrawer, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
         : base(model.Opacity / 100f, fenceManager)
     {
         _layoutLauncher = layoutLauncher;
         _wallpapers = wallpapers;
+        _junkDrawer = junkDrawer;
         _folderFences = folderFences;
         _model = model;
         _store = store;
+
+        // A saved height from before a row was added (the Junk Drawer row, say) would otherwise leave
+        // the newest row behind a scrollbar even with Always Max Rows on - grow to fit every row
+        // before the window is first created (CreateParams reads _model.Height).
+        if (_model.AlwaysMaxRows && _model.Height is { } savedHeight && savedHeight < HeightForRows(RowCountFixed))
+        {
+            _model.RowsShown = RowCountFixed;
+            _model.Height = HeightForRows(RowCountFixed);
+            Persist();
+        }
 
         // Keeps the Layout Launcher row's own switch from going stale whenever Visible changes via
         // some path other than this widget's own row click (ToggleRow already repaints itself right
         // there) - see LayoutLauncherWidget.VisibilityChanged's own doc comment.
         _layoutLauncher.VisibilityChanged += (_, _) => RefreshRowStates();
         _wallpapers.VisibilityChanged += (_, _) => RefreshRowStates();
+        _junkDrawer.VisibilityChanged += (_, _) => RefreshRowStates();
+        // The Fences row's switch, when Show/Hide All runs from the tray or the Junk Drawer instead.
+        Fences.VisibilityChanged += (_, _) => RefreshRowStates();
+        _folderFences.VisibilityChanged += (_, _) => RefreshRowStates();
 
         ExtraButtons = new List<ChromeButton>
         {
@@ -478,19 +496,13 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     // its own for any of them, just this one persistence hook.
     protected override void PersistStyle() => Persist();
 
-    private const int CmdToggleStartWithWindows = 1;
-    private const int CmdToggleShowHiddenFiles = 2;
     private const int CmdToggleAlwaysMaxRows = 3;
 
-    /// <summary>Rows Shown/Always Max Rows first - same stepper-plus-checkbox pair as
-    /// LayoutLauncherWidget's own additional rows (see its own doc comment for why a stepper rather
-    /// than a checkbox), just capped at RowCountFixed instead of a variable saved-profile count -
-    /// then Start with Windows/Show Hidden Files, the same two system-level toggles the tray menu
-    /// itself still shows, mirrored here now that Widget Manager is the entry point for most of what
-    /// used to live only in the tray (see TrayApplicationContext). Checked reads
-    /// StartupManager.IsEnabled/HiddenFilesManager.IsEnabled fresh on every open, same as the tray's
-    /// own items - both are system state Desktop Tool doesn't own, so a change made outside this menu
-    /// (or the tray's own copy of these two) is never left showing stale here either.</summary>
+    /// <summary>Rows Shown/Always Max Rows - same stepper-plus-checkbox pair as LayoutLauncherWidget's
+    /// own additional rows (see its own doc comment for why a stepper rather than a checkbox), just
+    /// capped at RowCountFixed instead of a variable saved-profile count. Start with Windows/Show
+    /// Hidden Files used to be mirrored here too; they live in the Junk Drawer widget now (plus the
+    /// tray menu).</summary>
     protected override IReadOnlyList<DropdownMenu.Row>? BuildAdditionalSettingsRows() => new List<DropdownMenu.Row>
     {
         new(0, "Rows Shown", IsHeader: true),
@@ -503,8 +515,6 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             IsChecked: () => _model.AlwaysMaxRows,
             Tooltip: "Rows Shown always shows every row - the list grows to fit them without "
                 + "resizing the widget itself"),
-        new(CmdToggleStartWithWindows, "Start with Windows", HasCheckbox: true, IsChecked: () => StartupManager.IsEnabled),
-        new(CmdToggleShowHiddenFiles, "Show Hidden Files", HasCheckbox: true, IsChecked: () => HiddenFilesManager.IsEnabled),
     };
 
     protected override void HandleSettingsCommand(int id)
@@ -515,12 +525,6 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
                 _model.AlwaysMaxRows = !_model.AlwaysMaxRows;
                 Persist();
                 SyncRowsShownToMax();
-                break;
-            case CmdToggleStartWithWindows:
-                StartupManager.SetEnabled(!StartupManager.IsEnabled);
-                break;
-            case CmdToggleShowHiddenFiles:
-                HiddenFilesManager.SetEnabled(!HiddenFilesManager.IsEnabled);
                 break;
             default:
                 base.HandleSettingsCommand(id);
@@ -593,8 +597,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     protected override int ListRowCount => RowCountFixed;
     protected override int ListRowHeight => ListRowHeightConst;
 
-    private const int SwitchWidth = 38;
-    private const int SwitchHeight = 18;
+    private const int SwitchWidth = ToggleSwitch.Width;
+    private const int SwitchHeight = ToggleSwitch.Height;
     private const int SwitchRightPadding = 4;
     private const int ButtonRightGap = 8;
     private const int ButtonSize = 20;
@@ -693,7 +697,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// fence is conceptually a kind of fence, so the two show/hide together under this one switch);
     /// Layout Launcher: the widget's own Visible; Snap Lines: SnapLineManager.Enabled; Widget
     /// Snapping: SnapLineManager.WidgetEdgesEnabled; Fence Trash Can: FenceManager.HasRecycleBin;
-    /// Wallpapers: the widget's own Visible. Same row order as Rows above.</summary>
+    /// Wallpapers/Junk Drawer: the widget's own Visible. Same row order as Rows above.</summary>
     private bool IsRowOn(int index) => index switch
     {
         0 => Fences.AnyVisible || _folderFences.AnyVisible,
@@ -702,6 +706,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         3 => Fences.SnapLines.WidgetEdgesEnabled,
         4 => Fences.HasRecycleBin,
         5 => _wallpapers.Visible,
+        6 => _junkDrawer.Visible,
         _ => false,
     };
 
@@ -721,6 +726,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
                 if (Fences.HasRecycleBin) Fences.RemoveRecycleBin(); else Fences.AddRecycleBin();
                 break;
             case 5: _wallpapers.ToggleVisible(); break;
+            case 6: _junkDrawer.ToggleVisible(); break;
         }
     }
 
@@ -731,8 +737,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case 0: Fences.CreateFence(); break;
             case 1: EditLayoutsRequested?.Invoke(this, EventArgs.Empty); break;
             case 2: Fences.SnapLines.EnterEditMode(); break;
-            // 3 (Widget Snapping), 4 (Fence Trash Can) and 5 (Wallpapers) have no action button -
-            // RowButtonIcon.None, never hit-testable.
+            // 3 (Widget Snapping), 4 (Fence Trash Can), 5 (Wallpapers) and 6 (Junk Drawer) have no
+            // action button - RowButtonIcon.None, never hit-testable.
         }
     }
 
@@ -938,43 +944,9 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         g.SmoothingMode = previousSmoothing;
     }
 
-    /// <summary>A small hand-drawn on/off pill - no existing toggle-switch control in this app to
-    /// reuse (every other checkbox-shaped control here, DropdownMenu's own HasCheckbox rows
-    /// included, is a plain checkbox, not a switch), so this is a new glyph in the same "no icon
-    /// asset library, just draw the shape" style as WarningIcon/LayoutLauncherWidget's own
-    /// PaintCopyGlyph/PaintDeleteGlyph. On is a solid white pill with its "On" text punched out in
-    /// the row's own background color (rowBackground - the same alternating ThemedListRow/
-    /// ThemedListRowDark fill the row itself sits on), so the label reads as a cutout rather than
-    /// printed text sitting on top; off stays outlined only, in ThemedCheckboxBorder, with plain
-    /// WhiteSmoke text - unlike on, off has no fill of its own for the label to contrast against.</summary>
-    private void PaintRowSwitch(Graphics g, Rectangle rect, bool on, Color rowBackground)
-    {
-        using var path = RoundedRectPath.Full(rect, rect.Height / 2);
-        if (on)
-        {
-            using var fill = new SolidBrush(Color.White);
-            g.FillPath(fill, path);
-        }
-        else
-        {
-            using var border = new Pen(ThemedCheckboxBorder);
-            g.DrawPath(border, path);
-        }
-
-        var previousTextHint = g.TextRenderingHint;
-        g.TextRenderingHint = TextRenderingHint.AntiAlias;
-        using (var textBrush = new SolidBrush(on ? rowBackground : Color.WhiteSmoke))
-        using (var textFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-            g.DrawString(on ? "On" : "Off", SwitchFont, textBrush, rect, textFormat);
-        g.TextRenderingHint = previousTextHint;
-    }
-
-    // A smaller font than the widget's own Control.Font (AppTheme.Font, 9pt) - "On"/"Off" at 9pt
-    // doesn't fit inside an 18px-tall pill without either clipping or forcing the pill itself
-    // taller than a row comfortably fits. Created once, not per-paint - a fresh Font on every single
-    // repaint would be wasteful, same reasoning as LayeredWidgetForm's own cached _titleFont.
-    private readonly Font _switchFont = new(AppTheme.Font.FontFamily, 7f);
-    private Font SwitchFont => _switchFont;
+    /// <summary>The shared on/off pill (see ToggleSwitch) - Off outlined in ThemedCheckboxBorder.</summary>
+    private void PaintRowSwitch(Graphics g, Rectangle rect, bool on, Color rowBackground) =>
+        ToggleSwitch.Paint(g, rect, on, rowBackground, ThemedCheckboxBorder);
 
     /// <summary>Chained immediately left of the header close glyph (see GetHeaderCloseButtonRect) -
     /// same size, same vertical centering, just one more optional header-row control living right next

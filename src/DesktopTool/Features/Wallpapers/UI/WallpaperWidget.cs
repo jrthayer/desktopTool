@@ -29,8 +29,8 @@ internal sealed class WallpaperWidget : LayeredWidgetForm
 
     // Tile menu command ids (separate menu from Settings, so these only need to be unique here).
     private const int CmdImage = 1;
-    private const int CmdColorCustom = 2;
-    private const int CmdColorEyedrop = 3;
+    private const int CmdTileColorCustom = 2;
+    private const int CmdTileColorEyedrop = 3;
     private const int CmdSlideshowFolder = 4;
     private const int CmdSlideshowNext = 5;
     private const int CmdSlideshowShuffle = 6;
@@ -479,8 +479,8 @@ internal sealed class WallpaperWidget : LayeredWidgetForm
                 IsChecked: () => KindOf(monitor) == BackgroundKind.Color && _service.GetBackground(deviceId)?.ColorArgb == argb,
                 Tooltip: Palette[i].Name));
         }
-        colorRows.Add(new DropdownMenu.Row(CmdColorCustom, string.Empty, IsGridItem: true, Glyph: DropdownMenu.GridGlyph.Plus, Tooltip: "Custom..."));
-        colorRows.Add(new DropdownMenu.Row(CmdColorEyedrop, string.Empty, IsGridItem: true, Glyph: DropdownMenu.GridGlyph.Eyedropper, Tooltip: "Eyedropper"));
+        colorRows.Add(new DropdownMenu.Row(CmdTileColorCustom, string.Empty, IsGridItem: true, Glyph: DropdownMenu.GridGlyph.Plus, Tooltip: "Custom..."));
+        colorRows.Add(new DropdownMenu.Row(CmdTileColorEyedrop, string.Empty, IsGridItem: true, Glyph: DropdownMenu.GridGlyph.Eyedropper, Tooltip: "Eyedropper"));
 
         var slideshowRows = new List<DropdownMenu.Row>
         {
@@ -559,14 +559,14 @@ internal sealed class WallpaperWidget : LayeredWidgetForm
                     if (PickImage(monitor) is { } image)
                         _service.ApplyImage(monitor, image);
                     break;
-                case CmdColorCustom:
+                case CmdTileColorCustom:
                     using (var dialog = new ColorDialog { FullOpen = true, Color = CurrentColor(monitor) })
                     {
                         if (dialog.ShowDialog(this) == DialogResult.OK)
                             _service.ApplyColor(monitor, dialog.Color);
                     }
                     break;
-                case CmdColorEyedrop:
+                case CmdTileColorEyedrop:
                     EyedropperOverlay.Pick(color => ApplySafely(() => _service.ApplyColor(monitor, color)));
                     break;
                 case CmdSlideshowFolder:

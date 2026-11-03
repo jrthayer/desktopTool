@@ -116,6 +116,12 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
             "Center, Tile) is a single Windows setting for every monitor, under the widget's " +
             "Settings menu. Slideshows only advance while Desktop Tool is running. Widget " +
             "Manager's own switch shows or hides the widget."),
+        new("Junk Drawer",
+            "Small system-level tools, each with an on/off switch: Show All Fences (the same as " +
+            "the tray's Show/Hide All), Show Hidden Files (takes effect straight away on the " +
+            "desktop and in open Explorer windows), and Start with Windows. Click a row to flip " +
+            "it. The tray menu keeps its own copy of each, and they all stay in sync. Widget " +
+            "Manager's own switch shows or hides the widget."),
     };
 
     private const string GitHubFeaturesUrl = "https://github.com/jrthayer/desktopTool/blob/master/src/DesktopTool/Features/";
@@ -131,6 +137,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         ["Widget Snapping"] = GitHubFeaturesUrl + "Snapping/README.md",
         ["Fence Trash Can"] = GitHubFeaturesUrl + "Fences/README.md#recycle-bin",
         ["Wallpapers"] = GitHubFeaturesUrl + "Wallpapers/README.md",
+        ["Junk Drawer"] = GitHubFeaturesUrl + "JunkDrawer/README.md",
     };
 
     private const int GitHubButtonWidth = 120;
