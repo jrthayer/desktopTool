@@ -74,6 +74,14 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     private const int CmdResizeBoth = 5;
     private const int CmdResizeLeftRight = 6;
     private const int CmdResizeTopDown = 7;
+    private const int CmdToggleImagePreviews = 8;
+
+    // Requested at 2x IconSize so the downscale into the cell stays crisp (and on higher-DPI setups).
+    private const int ThumbnailRequestSize = IconSize * 2;
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".jpg", ".jpeg", ".jfif", ".png", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".heic", ".heif", ".avif", ".ico",
+    };
     // Not a real WM_COMMAND id - just this row's own Row.Id value for the non-clickable "Fence
     // Dimensions" section header inside the OCD flyout, same as FenceForm's own
     // TagFenceDimensionsHeader.
@@ -98,6 +106,10 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
     // just also kept here since dragging a grid item out needs it too.
     private readonly FenceManager _fences;
     private readonly Dictionary<string, Icon?> _iconCache = new();
+    // Image previews (see GetThumbnail) - a null value caches "the shell has no thumbnail for this",
+    // so a failed file isn't re-requested on every paint. Pending ones draw their plain icon meanwhile.
+    private readonly Dictionary<string, Bitmap?> _thumbnailCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _thumbnailsPending = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<GridEntry> _entries = new();
     private readonly Scrollbar _scrollbar = new();
     private readonly System.Windows.Forms.Timer _refreshTimer = new() { Interval = 150 };
@@ -1536,6 +1548,8 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         }
 
         rows.Add(new DropdownMenu.Row(CmdToggleHideLabels, "Hide Shortcut Names", HasCheckbox: true, IsChecked: () => _model.HideLabels));
+        rows.Add(new DropdownMenu.Row(CmdToggleImagePreviews, "Show Image Previews", HasCheckbox: true, IsChecked: () => _model.ShowImagePreviews,
+            Tooltip: "Show image files as a thumbnail of the picture instead of their file-type icon."));
         rows.Add(new DropdownMenu.Row(CmdToggleOcdSizing, "OCD Fence Sizing", HasCheckbox: true, IsChecked: () => _model.OcdFenceSizing,
             Tooltip: "After you resize this fence by hand, automatically snap it to the tightest size that fits its icons (same as OCD Formatting > Both)."));
         rows.Add(new DropdownMenu.Row(0, string.Empty, IsSeparator: true));
@@ -1558,6 +1572,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
             case CmdChangeFolder: BrowseForFolder(); break;
             case CmdOpenInExplorer: OpenItem(_model.RootFolderPath); break;
             case CmdToggleHideLabels: ToggleHideLabels(); break;
+            case CmdToggleImagePreviews: ToggleImagePreviews(); break;
             case CmdToggleOcdSizing: ToggleOcdFenceSizing(); break;
             case CmdResizeBoth: FormatDimensions(adjustWidth: true, adjustHeight: true); break;
             case CmdResizeLeftRight: FormatDimensions(adjustWidth: true, adjustHeight: false); break;
@@ -1577,6 +1592,26 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         if (_model.OcdFenceSizing)
             FormatDimensions(adjustWidth: false, adjustHeight: true);
         RenderAndPresent();
+    }
+
+    private void ToggleImagePreviews()
+    {
+        _model.ShowImagePreviews = !_model.ShowImagePreviews;
+        _manager.Save();
+        // Turning it off frees the thumbnails; turning it back on regenerates them, which also
+        // picks up any images edited in place since they were first loaded.
+        if (!_model.ShowImagePreviews)
+            ClearThumbnails();
+        RenderAndPresent();
+    }
+
+    private void ClearThumbnails()
+    {
+        foreach (var bitmap in _thumbnailCache.Values)
+            bitmap?.Dispose();
+        _thumbnailCache.Clear();
+        // Anything still in flight is dropped on arrival (see GetThumbnail's continuation).
+        _thumbnailsPending.Clear();
     }
 
     private void ToggleOcdFenceSizing()
@@ -1647,6 +1682,7 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         _dragGhost?.Dispose();
         foreach (var icon in _iconCache.Values)
             icon?.Dispose();
+        ClearThumbnails();
     }
 
     private static int GetColumns(int contentWidth) => Math.Max(1, (contentWidth - GridPadding * 2) / CellWidth);
@@ -1711,6 +1747,63 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
         if (icon is not null)
             _iconCache[path] = icon;
         return icon;
+    }
+
+    private static bool IsImageFile(string path) => ImageExtensions.Contains(Path.GetExtension(path));
+
+    /// <summary>The image's own preview (see ShellThumbnails), or null while it's still being
+    /// generated or when the shell has none - the caller draws the ordinary icon in either case.
+    /// Generation happens off the UI thread; this repaints once a thumbnail arrives.</summary>
+    private Bitmap? GetThumbnail(string path)
+    {
+        if (_thumbnailCache.TryGetValue(path, out var cached))
+            return cached;
+        if (!_thumbnailsPending.Add(path))
+            return null;
+
+        ShellThumbnails.GetThumbnailAsync(path, ThumbnailRequestSize).ContinueWith(task =>
+        {
+            var bitmap = task.Result;
+            if (IsDisposed || !IsHandleCreated)
+            {
+                bitmap?.Dispose();
+                return;
+            }
+
+            try
+            {
+                BeginInvoke(() =>
+                {
+                    // Dropped if the fence closed, or previews were switched off (which clears the
+                    // pending set) while this was in flight.
+                    if (IsDisposed || !_thumbnailsPending.Remove(path))
+                    {
+                        bitmap?.Dispose();
+                        return;
+                    }
+                    _thumbnailCache[path] = bitmap;
+                    if (bitmap is not null)
+                        RenderAndPresent();
+                });
+            }
+            catch (InvalidOperationException)
+            {
+                // Handle destroyed between the check above and BeginInvoke.
+                bitmap?.Dispose();
+            }
+        }, TaskScheduler.Default);
+
+        return null;
+    }
+
+    /// <summary>Scales image to fit inside rect keeping its aspect ratio, centered - a wide photo
+    /// letterboxes rather than stretching to the square icon cell.</summary>
+    private static Rectangle FitInside(Image image, Rectangle rect)
+    {
+        var scale = Math.Min((float)rect.Width / image.Width, (float)rect.Height / image.Height);
+        var width = Math.Max(1, (int)Math.Round(image.Width * scale));
+        var height = Math.Max(1, (int)Math.Round(image.Height * scale));
+        return new Rectangle(rect.X + (rect.Width - width) / 2, rect.Y + (rect.Height - height) / 2, width, height);
     }
 
     private static void DrawImageWithOpacity(Graphics g, Image image, Rectangle rect, float opacity)
@@ -1828,7 +1921,18 @@ internal sealed class FolderFenceForm : LayeredWidgetForm
 
             var iconX = cellX + (CellWidth - IconSize) / 2;
             var iconRect = ToWindow(new Rectangle(iconX, cellY + IconTopPadding, IconSize, IconSize));
-            if (GetIcon(entry.Path) is { } icon)
+            if (_model.ShowImagePreviews && !entry.IsDirectory && IsImageFile(entry.Path) && GetThumbnail(entry.Path) is { } thumbnail)
+            {
+                var thumbRect = FitInside(thumbnail, iconRect);
+                var previousInterpolation = g.InterpolationMode;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                if (isDragSource)
+                    DrawImageWithOpacity(g, thumbnail, thumbRect, 0.35f);
+                else
+                    g.DrawImage(thumbnail, thumbRect);
+                g.InterpolationMode = previousInterpolation;
+            }
+            else if (GetIcon(entry.Path) is { } icon)
             {
                 using var bitmap = icon.ToBitmap();
                 // Faded in place while it's being dragged - the ghost near the cursor (see

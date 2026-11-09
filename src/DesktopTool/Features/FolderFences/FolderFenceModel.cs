@@ -43,6 +43,11 @@ public sealed class FolderFenceModel : WidgetStyleModel
     public bool HideLabels { get; set; }
     public bool OcdFenceSizing { get; set; }
 
+    /// <summary>Draws image files as an actual thumbnail of the image instead of their file-type
+    /// icon (see FolderFenceForm.GetThumbnail). On by default - including for folder fences saved
+    /// before this setting existed, since the JSON loader keeps this initializer when it's absent.</summary>
+    public bool ShowImagePreviews { get; set; } = true;
+
     [JsonIgnore]
     public Rectangle Bounds
     {

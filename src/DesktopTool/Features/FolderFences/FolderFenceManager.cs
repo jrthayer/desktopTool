@@ -79,6 +79,7 @@ public sealed class FolderFenceManager : IDisposable
             Bounds = NextDefaultBounds(source.Bounds.Size),
             HideLabels = source.HideLabels,
             OcdFenceSizing = source.OcdFenceSizing,
+            ShowImagePreviews = source.ShowImagePreviews,
             TintColor = source.TintColor,
             TintIsExact = source.TintIsExact,
             HeaderDarkness = source.HeaderDarkness,
