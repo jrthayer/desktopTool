@@ -197,6 +197,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _fenceLocker.RefreshRowStates();
     }
 
+    /// <summary>Launching Fence Tool again while it's running (see Program's InstancePing) - brings back
+    /// a hidden desktop and surfaces Widget Manager so the launch visibly did something.</summary>
+    public void SurfaceForRelaunch()
+    {
+        if (DesktopHider.IsHidden)
+            DesktopHider.Show();
+        _widgetManager.ShowAndActivate();
+    }
+
     // CheckOnClick already flipped the item's own Checked before this fires - just persist
     // whatever it now shows.
     private void OnToggleStartup(object? sender, EventArgs e) =>

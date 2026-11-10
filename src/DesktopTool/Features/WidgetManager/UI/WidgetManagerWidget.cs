@@ -237,6 +237,16 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             ShowAndPersist();
     }
 
+    /// <summary>Shows (persisting Visible) if hidden, otherwise just brings it forward - what launching
+    /// Fence Tool again while it's already running does, never hiding it the way ToggleVisible would.</summary>
+    public void ShowAndActivate()
+    {
+        if (Visible)
+            Activate();
+        else
+            ShowAndPersist();
+    }
+
     private void ShowAndPersist()
     {
         Show();

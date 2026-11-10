@@ -74,6 +74,30 @@ public sealed class DesktopListView : IDisposable
         _listViewProcessId = 0;
     }
 
+    // How long one message to Explorer's icon list may block this (UI) thread.
+    private const uint ListViewTimeoutMs = 2000;
+
+    /// <summary>Every message to the desktop's icon list goes through here rather than a plain
+    /// SendMessage, which waits forever. Explorer's desktop is often busy, or not yet finished, right
+    /// after logon - a plain SendMessage then froze Fence Tool's startup before its message loop (and
+    /// so its tray icon) ever ran, leaving it alive in Task Manager but invisible. A timeout or hung
+    /// Explorer drops the cached handles and returns zero, which every caller already treats as
+    /// "nothing yet"; the next call rediscovers them.</summary>
+    private IntPtr SendToListView(uint msg, IntPtr wParam, IntPtr lParam)
+    {
+        if (_hListView == IntPtr.Zero)
+            return IntPtr.Zero;
+
+        if (NativeMethods.SendMessageTimeout(_hListView, msg, wParam, lParam,
+                NativeMethods.SMTO_ABORTIFHUNG, ListViewTimeoutMs, out var result) == IntPtr.Zero)
+        {
+            Invalidate();
+            return IntPtr.Zero;
+        }
+
+        return result;
+    }
+
     /// <summary>OpenProcess against explorer.exe can fail for reasons that clear up on their own
     /// (explorer mid-restart) or ones that won't (a real integrity-level mismatch) - only the
     /// latter is worth telling the user about, so this checks which one actually happened.</summary>
@@ -120,7 +144,7 @@ public sealed class DesktopListView : IDisposable
         style &= ~NativeMethods.LVS_AUTOARRANGE;
         NativeMethods.SetWindowLongPtr(_hListView, NativeMethods.GWL_STYLE, (IntPtr)style);
 
-        NativeMethods.SendMessage(_hListView, NativeMethods.LVM_SETEXTENDEDLISTVIEWSTYLE,
+        SendToListView(NativeMethods.LVM_SETEXTENDEDLISTVIEWSTYLE,
             (IntPtr)(NativeMethods.LVS_EX_SNAPTOGRID | NativeMethods.LVS_EX_AUTOAUTOARRANGE), IntPtr.Zero);
     }
 
@@ -176,7 +200,7 @@ public sealed class DesktopListView : IDisposable
         if (!EnsureDiscovered())
             return Array.Empty<DesktopIcon>();
 
-        int count = (int)NativeMethods.SendMessage(_hListView, NativeMethods.LVM_GETITEMCOUNT, IntPtr.Zero, IntPtr.Zero);
+        int count = (int)SendToListView(NativeMethods.LVM_GETITEMCOUNT, IntPtr.Zero, IntPtr.Zero);
         if (count <= 0)
             return Array.Empty<DesktopIcon>();
 
@@ -272,7 +296,7 @@ public sealed class DesktopListView : IDisposable
                 if (!NativeMethods.WriteProcessMemory(hProcess, remotePoint, bytes, (uint)pointSize, out _))
                     continue;
 
-                NativeMethods.SendMessage(_hListView, NativeMethods.LVM_SETITEMPOSITION32, (IntPtr)index, remotePoint);
+                SendToListView(NativeMethods.LVM_SETITEMPOSITION32, (IntPtr)index, remotePoint);
 
                 // LVM_SETITEMPOSITION32 updates the ListView's internal bookkeeping but doesn't
                 // reliably repaint the affected screen area on its own (unlike a real user drag,
@@ -280,7 +304,7 @@ public sealed class DesktopListView : IDisposable
                 // (reads back correctly) but visually stays put or renders nowhere until
                 // something else forces a repaint. LVM_REDRAWITEMS targets the specific item
                 // (unlike a blanket InvalidateRect, which alone wasn't enough).
-                NativeMethods.SendMessage(_hListView, NativeMethods.LVM_REDRAWITEMS, (IntPtr)index, (IntPtr)index);
+                SendToListView(NativeMethods.LVM_REDRAWITEMS, (IntPtr)index, (IntPtr)index);
             }
 
             NativeMethods.InvalidateRect(_hListView, IntPtr.Zero, true);
@@ -354,7 +378,7 @@ public sealed class DesktopListView : IDisposable
             if (!NativeMethods.WriteProcessMemory(hProcess, remote, StructToBytes(info, size), (uint)size, out _))
                 return false;
 
-            var item = NativeMethods.SendMessage(_hListView, LVM_HITTEST, IntPtr.Zero, remote).ToInt32();
+            var item = SendToListView(LVM_HITTEST, IntPtr.Zero, remote).ToInt32();
             return item < 0;
         }
         finally
@@ -379,7 +403,7 @@ public sealed class DesktopListView : IDisposable
         if (!NativeMethods.WriteProcessMemory(hProcess, remoteLvItem, StructToBytes(lvItem, lvItemSize), (uint)lvItemSize, out _))
             return string.Empty;
 
-        NativeMethods.SendMessage(_hListView, NativeMethods.LVM_GETITEMTEXTW, (IntPtr)index, remoteLvItem);
+        SendToListView(NativeMethods.LVM_GETITEMTEXTW, (IntPtr)index, remoteLvItem);
 
         var textBytes = new byte[textBufferChars * sizeof(char)];
         if (!NativeMethods.ReadProcessMemory(hProcess, remoteText, textBytes, (uint)textBytes.Length, out _))
@@ -392,7 +416,7 @@ public sealed class DesktopListView : IDisposable
 
     private Point ReadItemPosition(IntPtr hProcess, int index, IntPtr remotePoint, int pointSize)
     {
-        NativeMethods.SendMessage(_hListView, NativeMethods.LVM_GETITEMPOSITION, (IntPtr)index, remotePoint);
+        SendToListView(NativeMethods.LVM_GETITEMPOSITION, (IntPtr)index, remotePoint);
 
         var bytes = new byte[pointSize];
         if (!NativeMethods.ReadProcessMemory(hProcess, remotePoint, bytes, (uint)bytes.Length, out _))
