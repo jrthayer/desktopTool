@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
-using DesktopTool.Features.Fences.Native;
 using DesktopTool.Native;
 
 namespace DesktopTool;
@@ -18,9 +17,6 @@ internal static class Program
     // How long a second launch waits for the running instance to answer before calling it stuck.
     // Generous, since a healthy instance can still be busy building its fences at startup.
     private const uint PingTimeoutMs = 5000;
-
-    // How long to wait at logon for Explorer's taskbar and desktop to exist before starting anyway.
-    private static readonly TimeSpan ShellWaitLimit = TimeSpan.FromSeconds(60);
 
     [STAThread]
     private static void Main()
@@ -52,7 +48,6 @@ internal static class Program
         using var ping = new InstancePing();
 
         AllowTaskbarCreatedWhenElevated();
-        WaitForShell();
 
         var context = new TrayApplicationContext();
         ping.Pinged += (_, _) => context.SurfaceForRelaunch();
@@ -108,25 +103,6 @@ internal static class Program
         MessageBox.Show("Couldn't end the stuck copy of Fence Tool.\n\nEnd DesktopTool.exe in Task Manager, then start Fence Tool again.",
             "Fence Tool", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         return false;
-    }
-
-    /// <summary>At logon this process can start before Explorer has built its taskbar and desktop.
-    /// Fences talk to the desktop's icon list as they load, and the tray icon needs the taskbar, so
-    /// wait (pumping messages, so a second launch's ping still gets answered) until both exist. Gives
-    /// up after ShellWaitLimit and starts anyway - the TaskbarCreated and rediscovery paths already
-    /// cope with an Explorer that turns up late.</summary>
-    private static void WaitForShell()
-    {
-        var waited = Stopwatch.StartNew();
-        while (waited.Elapsed < ShellWaitLimit)
-        {
-            if (NativeMethods.FindWindow("Shell_TrayWnd", null) != IntPtr.Zero
-                && DesktopListView.FindDesktopDefView().DefView != IntPtr.Zero)
-                return;
-
-            Application.DoEvents();
-            Thread.Sleep(500);
-        }
     }
 
     // When this process runs elevated, UIPI drops the "TaskbarCreated" broadcast that a
