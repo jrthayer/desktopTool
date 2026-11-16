@@ -38,6 +38,13 @@ Each `LayoutEntry` records:
   (PowerShell/PowerShell 7/Command Prompt) says which shell those commands should run in, since
   Windows Terminal isn't itself a shell and there's no way to tell from a captured window alone
   which one it was actually running.
+- **Store/MSIX apps** (anything captured from `Program Files\WindowsApps\...`, Windows Terminal
+  included) never launch from that captured path. The folder is version-stamped and disappears on
+  every app update. Instead, `PackagedAppLauncher` looks up the package's current install and
+  starts the app through its app execution alias (e.g. `wt.exe`) when it has one, otherwise by
+  AUMID activation, so these entries survive updates.
+- **Windows Terminal** launches additionally get `-w new`, so Terminal never tabs into an
+  already-open window instead of opening the new window the layout needs to place.
 
 **Limitations:** two entries for the same program still both become separate `LayoutEntry`
 objects, but `WindowPlacer`'s claim-tracking keeps them from fighting over the same window on

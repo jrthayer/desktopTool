@@ -239,17 +239,36 @@ internal static class WindowPlacer
             // of the separate window this entry needs to place. A terminal always launches its own
             // new process/window regardless (unlike a browser, it's never single-instance), so it
             // needs no equivalent flag.
+            var arguments = isBrowser
+                ? (hasUrl ? BuildNewWindowArgs(entry.Url!) : "--new-window")
+                : isTerminal && hasCommand
+                    ? BuildTerminalCommandArgs(exeName, entry)
+                    : entry.Arguments ?? string.Empty;
+
+            // Windows Terminal honours its own "windowingBehavior" setting, which can route a
+            // launch into an already-open window as a new tab - no new window would appear to poll
+            // for. "-w new" forces a separate top-level window regardless of that setting.
+            if (string.Equals(exeName, WindowsTerminalExeName, StringComparison.OrdinalIgnoreCase))
+                arguments = string.IsNullOrWhiteSpace(arguments) ? "-w new" : $"-w new {arguments}";
+
             try
             {
-                Process.Start(new ProcessStartInfo(entry.ProgramPath)
+                // Store/MSIX apps (Windows Terminal included) are started through their alias or
+                // package identity rather than their version-stamped WindowsApps path, which
+                // disappears on every app update - see PackagedAppLauncher. Null means "not a
+                // packaged app", so it's launched normally.
+                switch (PackagedAppLauncher.TryLaunch(entry.ProgramPath, arguments))
                 {
-                    Arguments = isBrowser
-                        ? (hasUrl ? BuildNewWindowArgs(entry.Url!) : "--new-window")
-                        : isTerminal && hasCommand
-                            ? BuildTerminalCommandArgs(exeName, entry)
-                            : entry.Arguments ?? string.Empty,
-                    UseShellExecute = true,
-                });
+                    case false:
+                        throw new Win32Exception();
+                    case null:
+                        Process.Start(new ProcessStartInfo(entry.ProgramPath)
+                        {
+                            Arguments = arguments,
+                            UseShellExecute = true,
+                        });
+                        break;
+                }
             }
             catch (Win32Exception)
             {
