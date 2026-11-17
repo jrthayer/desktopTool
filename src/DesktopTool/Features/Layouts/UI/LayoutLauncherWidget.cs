@@ -1,5 +1,6 @@
 using System.Drawing.Text;
 using DesktopTool.Features.Fences;
+using DesktopTool.Features.Snapping;
 using DesktopTool.Native;
 using DesktopTool.UI;
 
@@ -205,6 +206,8 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
         // whatever just changed (name, count, or both).
         SyncRowsShownToMax();
         RenderAndPresent();
+        // A layout just added may need more height than the body has.
+        EnforceMinHeight();
     }
 
     protected override void DisposeOwnedResources()
@@ -411,6 +414,8 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
             _model.HideHeader = value;
             Persist();
             RenderAndPresent();
+            // The header is part of the height every row needs.
+            EnforceMinHeight();
         }
     }
 
@@ -444,9 +449,11 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
             return;
         _model.RowsShown = other._model.RowsShown;
         _model.AlwaysMaxRows = other._model.AlwaysMaxRows;
+        _model.MinHeightFitsAllRows = other._model.MinHeightFitsAllRows;
     }
 
     private const int CmdToggleAlwaysMaxRows = 1;
+    private const int CmdToggleMinHeightFitsAllRows = 2;
 
     /// <summary>The only thing genuinely specific to this widget beyond the base's own default rows -
     /// Rows Shown/Always Max Rows only mean anything for a widget with a row list, so they don't
@@ -458,7 +465,7 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
     protected override IReadOnlyList<DropdownMenu.Row>? BuildAdditionalSettingsRows()
     {
         var maxRows = Math.Max(1, ListRowCount);
-        return new List<DropdownMenu.Row>
+        var rows = new List<DropdownMenu.Row>
         {
             new(0, "Rows Shown", IsHeader: true),
             new(0, string.Empty, IsStepper: true,
@@ -471,6 +478,17 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
                 Tooltip: "Rows Shown always tracks the current number of saved layouts - the list "
                     + "grows/shrinks with it, without resizing the widget itself"),
         };
+
+        // Only meaningful alongside Always Max Rows, so only offered while it's on.
+        if (_model.AlwaysMaxRows)
+        {
+            rows.Add(new(CmdToggleMinHeightFitsAllRows, "Min Height Fits All Rows", HasCheckbox: true,
+                IsChecked: () => _model.MinHeightFitsAllRows,
+                Tooltip: "The widget can't be resized shorter than it takes to show every saved "
+                    + "layout, and grows when a new one is saved"));
+        }
+
+        return rows;
     }
 
     protected override void HandleSettingsCommand(int id)
@@ -481,6 +499,13 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
                 _model.AlwaysMaxRows = !_model.AlwaysMaxRows;
                 Persist();
                 SyncRowsShownToMax();
+                RefreshSettingsMenuRows();
+                EnforceMinHeight();
+                break;
+            case CmdToggleMinHeightFitsAllRows:
+                _model.MinHeightFitsAllRows = !_model.MinHeightFitsAllRows;
+                Persist();
+                EnforceMinHeight();
                 break;
             default:
                 base.HandleSettingsCommand(id);
@@ -509,7 +534,43 @@ internal sealed class LayoutLauncherWidget : LayeredWidgetForm
     /// <summary>The body height that fits exactly n rows, at this widget's own current width - the
     /// same overhead formula GetListArea itself measures against, just solved for total height
     /// instead of the list's own remaining space.</summary>
-    private int HeightForRows(int rows) => NonListOverhead(_model.Width) + rows * ListRowHeight;
+    private int HeightForRows(int rows) => HeightForRows(rows, _model.Width);
+
+    /// <summary>Same, at a given width - the bottom button row can wrap onto two lines when narrow,
+    /// so the overhead depends on width (see NonListOverhead), and a resize drag changes it.</summary>
+    private int HeightForRows(int rows, int width) => NonListOverhead(width) + rows * ListRowHeight;
+
+    private bool MinHeightActive => _model.AlwaysMaxRows && _model.MinHeightFitsAllRows;
+
+    private int AllRows => Math.Max(1, ListRowCount);
+
+    /// <summary>Grows the body to fit every saved layout if Min Height Fits All Rows is in effect and
+    /// it's currently shorter - a no-op otherwise. Only ever grows: deleting a layout lowers the
+    /// minimum but leaves the body as tall as it is.</summary>
+    private void EnforceMinHeight()
+    {
+        var min = HeightForRows(AllRows);
+        if (MinHeightActive && GetCurrentBody().Height < min)
+            SetBodyHeight(min);
+    }
+
+    /// <summary>The base's snapping resize, then - while Min Height Fits All Rows is in effect -
+    /// pushes whichever horizontal edge is being dragged back out so the body never gets shorter
+    /// than every saved layout needs at the width it's being resized to.</summary>
+    protected override Rectangle ComputeResizedBody(Rectangle proposedBody, SnapEdges activeEdges)
+    {
+        var body = base.ComputeResizedBody(proposedBody, activeEdges);
+        if (!MinHeightActive)
+            return body;
+
+        var min = HeightForRows(AllRows, body.Width);
+        if (body.Height >= min)
+            return body;
+
+        return (activeEdges & SnapEdges.Top) != 0
+            ? Rectangle.FromLTRB(body.Left, body.Bottom - min, body.Right, body.Bottom)
+            : Rectangle.FromLTRB(body.Left, body.Top, body.Right, body.Top + min);
+    }
 
     /// <summary>Keeps Rows Shown pinned to the current saved-layout count while AlwaysMaxRows is on -
     /// a no-op otherwise. Unlike SetRowsShown, this only ever touches GetListArea's own row cap, not

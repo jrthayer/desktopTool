@@ -146,7 +146,10 @@ its body.
 - **Rows Shown** (in the widget's Settings menu) sets how many rows the list reserves body space
   for — fewer saved layouts than that just leaves blank space below the list; more scrolls instead
   of growing further. **Always Max Rows** keeps it pinned to the current saved-layout count
-  automatically instead of a fixed number.
+  automatically instead of a fixed number. While that's ticked, **Min Height Fits All Rows** also
+  appears. With it on, the widget can't be resized shorter than it takes to show every saved layout,
+  and it grows when a new layout is saved. Deleting one lowers the minimum without shrinking the
+  widget.
 - Closing the widget (its "×") hides it rather than destroying it — its list, position, and every
   style setting persist to `layout-launcher.json` and come back on the next toggle-on or app
   restart, the same way a hidden fence's own state does.

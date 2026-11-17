@@ -49,6 +49,10 @@ contract section), Widget Manager's Settings menu has an **Additional** flyout w
 and **Always Max Rows**. **Start with Windows** and **Show Hidden Files** used to be here too; they've
 moved to the [Junk Drawer](../JunkDrawer/README.md) widget (and the tray menu still has them).
 
+While **Always Max Rows** is ticked, a **Min Height Fits All Rows** option appears below it. With it
+on, the widget can't be resized shorter than it takes to show every row, and it grows straight away
+if it's currently shorter. It does nothing while Always Max Rows is off, but stays saved.
+
 ## Limitations
 
 Snap Lines had no on/off concept at all before this widget existed - custom lines were always live

@@ -2,6 +2,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.FolderFences;
+using DesktopTool.Features.Snapping;
 using DesktopTool.Features.FenceLocker.UI;
 using DesktopTool.Features.WindowSnapping;
 using DesktopTool.Features.JunkDrawer.UI;
@@ -493,6 +494,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             _model.HideHeader = value;
             Persist();
             RenderAndPresent();
+            // The header is part of the height every row needs.
+            EnforceMinHeight();
         }
     }
 
@@ -516,25 +519,39 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     protected override void PersistStyle() => Persist();
 
     private const int CmdToggleAlwaysMaxRows = 3;
+    private const int CmdToggleMinHeightFitsAllRows = 4;
 
     /// <summary>Rows Shown/Always Max Rows - same stepper-plus-checkbox pair as LayoutLauncherWidget's
     /// own additional rows (see its own doc comment for why a stepper rather than a checkbox), just
     /// capped at RowCountFixed instead of a variable saved-profile count. Start with Windows/Show
     /// Hidden Files used to be mirrored here too; they live in the Junk Drawer widget now (plus the
     /// tray menu).</summary>
-    protected override IReadOnlyList<DropdownMenu.Row>? BuildAdditionalSettingsRows() => new List<DropdownMenu.Row>
+    protected override IReadOnlyList<DropdownMenu.Row>? BuildAdditionalSettingsRows()
     {
-        new(0, "Rows Shown", IsHeader: true),
-        new(0, string.Empty, IsStepper: true,
-            StepperValue: () => _model.RowsShown,
-            OnStepperChange: rows => SetRowsShown(Math.Clamp(rows, 1, RowCountFixed)),
-            StepperMin: 1, StepperMax: RowCountFixed, StepperStep: 1, StepperSuffix: "",
-            IsEnabled: () => !_model.AlwaysMaxRows),
-        new(CmdToggleAlwaysMaxRows, "Always Max Rows", HasCheckbox: true,
-            IsChecked: () => _model.AlwaysMaxRows,
-            Tooltip: "Rows Shown always shows every row - the list grows to fit them without "
-                + "resizing the widget itself"),
-    };
+        var rows = new List<DropdownMenu.Row>
+        {
+            new(0, "Rows Shown", IsHeader: true),
+            new(0, string.Empty, IsStepper: true,
+                StepperValue: () => _model.RowsShown,
+                OnStepperChange: rows => SetRowsShown(Math.Clamp(rows, 1, RowCountFixed)),
+                StepperMin: 1, StepperMax: RowCountFixed, StepperStep: 1, StepperSuffix: "",
+                IsEnabled: () => !_model.AlwaysMaxRows),
+            new(CmdToggleAlwaysMaxRows, "Always Max Rows", HasCheckbox: true,
+                IsChecked: () => _model.AlwaysMaxRows,
+                Tooltip: "Rows Shown always shows every row - the list grows to fit them without "
+                    + "resizing the widget itself"),
+        };
+
+        // Only meaningful alongside Always Max Rows, so only offered while it's on.
+        if (_model.AlwaysMaxRows)
+        {
+            rows.Add(new(CmdToggleMinHeightFitsAllRows, "Min Height Fits All Rows", HasCheckbox: true,
+                IsChecked: () => _model.MinHeightFitsAllRows,
+                Tooltip: "The widget can't be resized shorter than it takes to show every row"));
+        }
+
+        return rows;
+    }
 
     protected override void HandleSettingsCommand(int id)
     {
@@ -544,6 +561,13 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
                 _model.AlwaysMaxRows = !_model.AlwaysMaxRows;
                 Persist();
                 SyncRowsShownToMax();
+                RefreshSettingsMenuRows();
+                EnforceMinHeight();
+                break;
+            case CmdToggleMinHeightFitsAllRows:
+                _model.MinHeightFitsAllRows = !_model.MinHeightFitsAllRows;
+                Persist();
+                EnforceMinHeight();
                 break;
             default:
                 base.HandleSettingsCommand(id);
@@ -575,6 +599,32 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         _model.RowsShown = RowCountFixed;
         Persist();
         RenderAndPresent();
+    }
+
+    private bool MinHeightActive => _model.AlwaysMaxRows && _model.MinHeightFitsAllRows;
+
+    /// <summary>Grows the body to fit every row if Min Height Fits All Rows is in effect and it's
+    /// currently shorter - a no-op otherwise. Only ever grows; a taller body is left alone.</summary>
+    private void EnforceMinHeight()
+    {
+        var min = HeightForRows(RowCountFixed);
+        if (MinHeightActive && GetCurrentBody().Height < min)
+            SetBodyHeight(min);
+    }
+
+    /// <summary>The base's snapping resize, then - while Min Height Fits All Rows is in effect -
+    /// pushes whichever horizontal edge is being dragged back out so the body never gets shorter
+    /// than every row needs.</summary>
+    protected override Rectangle ComputeResizedBody(Rectangle proposedBody, SnapEdges activeEdges)
+    {
+        var body = base.ComputeResizedBody(proposedBody, activeEdges);
+        var min = HeightForRows(RowCountFixed);
+        if (!MinHeightActive || body.Height >= min)
+            return body;
+
+        return (activeEdges & SnapEdges.Top) != 0
+            ? Rectangle.FromLTRB(body.Left, body.Bottom - min, body.Right, body.Bottom)
+            : Rectangle.FromLTRB(body.Left, body.Top, body.Right, body.Top + min);
     }
 
     /// <summary>The body height that fits exactly n rows, at this widget's own fixed header/padding

@@ -37,4 +37,9 @@ public sealed class WidgetManagerModel : WidgetStyleModel
     /// here it only ever matters right after being turned on, since the row count this widget's own
     /// list shows never actually changes on its own the way a saved-layout count can.</summary>
     public bool AlwaysMaxRows { get; set; }
+
+    /// <summary>While on (and only while AlwaysMaxRows is too - it's only offered then), the widget
+    /// can't be resized shorter than it takes to show every row, and grows to that height if it's
+    /// currently shorter - see WidgetManagerWidget.EnforceMinHeight/ComputeResizedBody.</summary>
+    public bool MinHeightFitsAllRows { get; set; }
 }

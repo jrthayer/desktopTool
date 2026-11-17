@@ -37,4 +37,10 @@ public sealed class LayoutLauncherModel : WidgetStyleModel
     /// itself adds or removes afterward (Save Current Layout, a row's own Copy/Delete), re-syncs
     /// RowsShown (and so the widget's own size - see SetRowsShown/ResizeBodyHeight) to match.</summary>
     public bool AlwaysMaxRows { get; set; }
+
+    /// <summary>While on (and only while AlwaysMaxRows is too - it's only offered then), the widget
+    /// can't be resized shorter than it takes to show every saved layout, and grows to that height
+    /// whenever it's shorter (a layout was just saved, say) - see LayoutLauncherWidget.
+    /// EnforceMinHeight/ComputeResizedBody.</summary>
+    public bool MinHeightFitsAllRows { get; set; }
 }

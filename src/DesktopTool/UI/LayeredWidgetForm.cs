@@ -577,6 +577,11 @@ internal abstract class LayeredWidgetForm : Form
     /// additional rows didn't add).</summary>
     protected virtual IReadOnlyList<DropdownMenu.Row>? BuildAdditionalSettingsRows() => null;
 
+    /// <summary>Rebuilds the open Settings dropdown's rows in place - for a settings command that
+    /// changes which rows BuildSettingsRows returns (one row only shown while another is checked),
+    /// not just what they display. A no-op while the dropdown is closed.</summary>
+    protected void RefreshSettingsMenuRows() => SettingsDropdown?.ReplaceRows(BuildSettingsRows());
+
     /// <summary>Whether the "Light Border" row below is offered at all - true by default. A
     /// subclass whose header isn't a plain rounded band (FolderFenceForm's own folder tab, say) can
     /// turn this off if a lone stroke around just the header reads as wrong/incomplete against its

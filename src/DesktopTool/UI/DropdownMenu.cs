@@ -324,6 +324,25 @@ internal sealed class DropdownMenu : Form
         _submenu?.RefreshChecks();
     }
 
+    /// <summary>Swaps in a new set of rows on an already-open menu, for a click that changes which
+    /// rows exist rather than just what they show (Always Max Rows revealing its own Min Height Fits
+    /// All Rows option, say) - the menu stays open after a click, so without this the change wouldn't
+    /// show until it was closed and reopened. Keeps the top-left corner where it is and resizes to fit.
+    /// Any open submenu closes, since its opener row may have moved or gone.</summary>
+    public void ReplaceRows(IEnumerable<Row> rows)
+    {
+        CloseSubmenu();
+        _rows.Clear();
+        _rows.AddRange(rows);
+        _tooltipRowIndex = -1;
+        _toolTip.Hide(this);
+        if (_hoverIndex >= _rows.Count)
+            _hoverIndex = -1;
+
+        Size = MeasureLayout();
+        Invalidate();
+    }
+
     /// <summary>Measures what a menu built from these rows would be sized, without actually
     /// constructing one - used by FenceForm.ShouldSettingsButtonOpenLeft to decide which corner the
     /// settings button belongs in before the real DropdownMenu exists to measure.</summary>
