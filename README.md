@@ -2,7 +2,7 @@
 
 A Windows desktop app, run from the system tray, built to grow into a
 general desktop-organization toolkit over time. Its features are
-**Fences**, **Layouts**, and **Widget Manager**, built on a shared
+**Fences**, **Layouts**, **Widget Manager**, and **Window Snapping**, built on a shared
 **Snapping** engine — see below.
 
 ## Requirements
@@ -131,11 +131,33 @@ Tool, opening the hidden `hiddenDesktop` folder, or launching a program from
 the Start menu gets around it. Password and special-event unlocks last until
 Desktop Tool restarts.
 
+### Window Snapping
+
+Edge snapping for every normal app window, not just Desktop Tool's own
+widgets. Let go of a move or resize with an edge within 16px of a
+neighbouring window's edge and it snaps flush; a window left partly off
+screen is pulled back on. Dragging an edge shared with other windows
+resizes them along with it, the way Windows Snap does for snapped windows.
+While it's on, Windows' own drag-to-edge docking and stretch-to-full-height
+are turned off, and your settings come back when you switch it off or quit.
+Toggled via its own row on the [Widget Manager](#widget-manager) widget, and
+on by default.
+
+See [`src/DesktopTool/Features/WindowSnapping/README.md`](src/DesktopTool/Features/WindowSnapping/README.md)
+for which windows count, how followers keep up, and known limitations. All of
+its code lives under [`src/DesktopTool/Features/WindowSnapping`](src/DesktopTool/Features/WindowSnapping).
+
+**Limitations:** snapping happens when you let go, not live during the drag,
+and apps that enforce their own minimum size may stop a follower short of the
+shared line.
+
 ### Snapping
 
 The pure edge-snapping geometry (`SnapEngine`) that gives both Fences and
 the Layout Launcher widget their drag-to-snap feel — a shared, stateless
-utility rather than a user-facing feature of its own.
+utility rather than a user-facing feature of its own. It only covers Desktop
+Tool's own widgets; other apps' windows are handled by
+[Window Snapping](#window-snapping).
 
 See [`src/DesktopTool/Features/Snapping/README.md`](src/DesktopTool/Features/Snapping/README.md)
 for what it does and how the two features above use it. All of its code

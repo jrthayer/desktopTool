@@ -131,6 +131,12 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
             "and clicking one lets you click fences to place it on them. Manage Locks shows the " +
             "fences locked right now; Unlock History shows every unlock. Password and " +
             "special-event unlocks last until Desktop Tool restarts."),
+        new("Window Snapping",
+            "Snaps any app window's edges flush to its neighbours' when you let go of a move or " +
+            "resize within 16px, and pulls windows that end up partly off screen back on. Dragging " +
+            "an edge shared with other windows resizes them along with it. While it's on, Windows' " +
+            "own drag-to-edge docking and stretch-to-full-height are turned off; they come back " +
+            "when you switch it off or quit. Widget Manager's own switch turns it on or off."),
     };
 
     private const string GitHubFeaturesUrl = "https://github.com/jrthayer/desktopTool/blob/master/src/DesktopTool/Features/";
