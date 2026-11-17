@@ -3,6 +3,7 @@ using System.Drawing.Text;
 using DesktopTool.Features.Fences;
 using DesktopTool.Features.FolderFences;
 using DesktopTool.Features.FenceLocker.UI;
+using DesktopTool.Features.WindowSnapping;
 using DesktopTool.Features.JunkDrawer.UI;
 using DesktopTool.Features.Layouts.UI;
 using DesktopTool.Features.Wallpapers.UI;
@@ -15,7 +16,7 @@ namespace DesktopTool.Features.WidgetManager.UI;
 /// "Widget Manager" widget - a third, independent proof that LayeredWidgetForm's own chrome
 /// (move/resize/snap/rename/settings/theme/list) works for something that isn't a Fence or the
 /// Layout Launcher. Lists the app's toggleable widgets/switches - Fences, Layout Launcher, Snap
-/// Lines, Widget Snapping, Fence Trash Can, Wallpapers, Junk Drawer, Fence Locker - each as a fixed row (never added to/removed from,
+/// Lines, Widget Snapping, Fence Trash Can, Wallpapers, Junk Drawer, Fence Locker, Window Snapping - each as a fixed row (never added to/removed from,
 /// unlike Layout Launcher's own saved-profile list) with an on/off switch and, for the three that
 /// have somewhere to go, a row-specific action button, so all of them can be reached without
 /// opening the tray menu. Everything not genuinely specific to this widget (theme derivation, the
@@ -32,7 +33,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private const int ButtonBandOverhang = 19;
     private const int TopMarginWithButtons = OuterMarginPx + ButtonBandOverhang;
 
-    private const int RowCountFixed = 8;
+    private const int RowCountFixed = 9;
     private const int ListVerticalPadding = 8;
     private const int ListHorizontalPadding = 10;
 
@@ -48,6 +49,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     private readonly WallpaperWidget _wallpapers;
     private readonly JunkDrawerWidget _junkDrawer;
     private readonly FenceLockerWidget _fenceLocker;
+    private readonly WindowSnappingService _windowSnapping;
     private readonly FolderFenceManager _folderFences;
     private readonly WidgetManagerModel _model;
     private readonly WidgetManagerStore _store;
@@ -86,6 +88,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         new("Wallpapers", string.Empty, RowButtonIcon.None),
         new("Junk Drawer", string.Empty, RowButtonIcon.None),
         new("Fence Locker", string.Empty, RowButtonIcon.None),
+        new("Window Snapping", string.Empty, RowButtonIcon.None),
     };
 
     // Row click handling - clicking a row's own switch flips that widget's on/off state; its
@@ -130,13 +133,14 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// rows read from - WidgetManagerModel already implements IWidgetStyle.</summary>
     protected override IWidgetStyle Style => _model;
 
-    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, WallpaperWidget wallpapers, JunkDrawerWidget junkDrawer, FenceLockerWidget fenceLocker, FolderFenceManager folderFences, WidgetManagerModel model, WidgetManagerStore store)
+    public WidgetManagerWidget(FenceManager fenceManager, LayoutLauncherWidget layoutLauncher, WallpaperWidget wallpapers, JunkDrawerWidget junkDrawer, FenceLockerWidget fenceLocker, FolderFenceManager folderFences, WindowSnappingService windowSnapping, WidgetManagerModel model, WidgetManagerStore store)
         : base(model.Opacity / 100f, fenceManager)
     {
         _layoutLauncher = layoutLauncher;
         _wallpapers = wallpapers;
         _junkDrawer = junkDrawer;
         _fenceLocker = fenceLocker;
+        _windowSnapping = windowSnapping;
         _folderFences = folderFences;
         _model = model;
         _store = store;
@@ -712,7 +716,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
     /// fence is conceptually a kind of fence, so the two show/hide together under this one switch);
     /// Layout Launcher: the widget's own Visible; Snap Lines: SnapLineManager.Enabled; Widget
     /// Snapping: SnapLineManager.WidgetEdgesEnabled; Fence Trash Can: FenceManager.HasRecycleBin;
-    /// Wallpapers/Junk Drawer/Fence Locker: the widget's own Visible. Same row order as Rows above.</summary>
+    /// Wallpapers/Junk Drawer/Fence Locker: the widget's own Visible; Window Snapping:
+    /// WindowSnappingService.Enabled. Same row order as Rows above.</summary>
     private bool IsRowOn(int index) => index switch
     {
         0 => Fences.AnyVisible || _folderFences.AnyVisible,
@@ -723,6 +728,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
         5 => _wallpapers.Visible,
         6 => _junkDrawer.Visible,
         7 => _fenceLocker.Visible,
+        8 => _windowSnapping.Enabled,
         _ => false,
     };
 
@@ -744,6 +750,7 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case 5: _wallpapers.ToggleVisible(); break;
             case 6: _junkDrawer.ToggleVisible(); break;
             case 7: _fenceLocker.ToggleVisible(); break;
+            case 8: _windowSnapping.SetEnabled(!_windowSnapping.Enabled); break;
         }
     }
 
@@ -754,8 +761,8 @@ internal sealed class WidgetManagerWidget : LayeredWidgetForm
             case 0: Fences.CreateFence(); break;
             case 1: EditLayoutsRequested?.Invoke(this, EventArgs.Empty); break;
             case 2: Fences.SnapLines.EnterEditMode(); break;
-            // 3 (Widget Snapping), 4 (Fence Trash Can), 5 (Wallpapers), 6 (Junk Drawer) and
-            // 7 (Fence Locker) have no action button - RowButtonIcon.None, never hit-testable.
+            // 3 (Widget Snapping), 4 (Fence Trash Can), 5 (Wallpapers), 6 (Junk Drawer),
+            // 7 (Fence Locker) and 8 (Window Snapping) have no action button - RowButtonIcon.None, never hit-testable.
         }
     }
 

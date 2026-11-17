@@ -34,6 +34,9 @@ there's no toggle-switch control elsewhere in the app to reuse), and its own act
   its own `Visible`). No action button.
 - **Fence Locker** - the switch shows/hides the [Fence Locker](../FenceLocker/README.md) widget (reads/flips
   its own `Visible`). No action button. Hiding it doesn't unlock anything.
+- **Window Snapping** - the switch turns [Window Snapping](../WindowSnapping/README.md) on or off:
+  snapping app windows' edges together on release and resizing flush edges together. No action
+  button.
 
 The Fences switch also updates by itself whenever fences are shown or hidden in bulk
 (`FenceManager.VisibilityChanged`/`FolderFenceManager.VisibilityChanged`). The Junk Drawer's Hide

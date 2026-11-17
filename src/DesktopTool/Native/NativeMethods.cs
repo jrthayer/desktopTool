@@ -161,6 +161,8 @@ internal struct LVITEM
 
 internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
+internal delegate void WinEventProc(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint idEventThread, uint dwmsEventTime);
+
 internal static class NativeMethods
 {
     public const uint WM_SPAWN_WORKER = 0x052C;
@@ -182,6 +184,15 @@ internal static class NativeMethods
     public const uint LVS_EX_AUTOAUTOARRANGE = 0x01000000;
 
     public const uint SPI_GETICONMETRICS = 0x002D;
+
+    // Windows' own snapping that WindowSnapping's WindowsSnapOverride turns off: "stretch a window to
+    // full height when it's resized to the top/bottom of the screen" (snap sizing) and "maximize or
+    // half-snap a window dragged to a screen edge" (dock moving).
+    public const uint SPI_GETSNAPSIZING = 0x008E;
+    public const uint SPI_SETSNAPSIZING = 0x008F;
+    public const uint SPI_GETDOCKMOVING = 0x0090;
+    public const uint SPI_SETDOCKMOVING = 0x0091;
+    public const uint SPIF_SENDCHANGE = 0x02;
 
     public const uint SMTO_ABORTIFHUNG = 0x0002;
 
@@ -246,6 +257,8 @@ internal static class NativeMethods
 
     public const uint SWP_NOMOVE = 0x0002;
     public const uint SWP_NOZORDER = 0x0004;
+    public const uint SWP_NOOWNERZORDER = 0x0200;
+    public const uint SWP_ASYNCWINDOWPOS = 0x4000;
     public static readonly IntPtr HWND_TOPMOST = new(-1);
     public static readonly IntPtr HWND_BOTTOM = new(1);
 
@@ -381,6 +394,11 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, IntPtr pvParam, uint fWinIni);
 
+    // For the SPI_GET* actions that write a single BOOL through pvParam.
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, out int pvParam, uint fWinIni);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
 
@@ -409,11 +427,28 @@ internal static class NativeMethods
 
     // The window's visible frame, without the invisible resize borders Win10/11 add around it -
     // GetWindowRect includes those (~7px each side), so two windows placed edge-to-edge by their
-    // GetWindowRect show a visible gap. See WindowPlacer.TryGetFrameInsets.
+    // GetWindowRect show a visible gap. See WindowPlacer.TryGetFrameInsets / WindowSnapper.
     public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
 
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
+
+    // WinEvent hooks used by WindowSnapper to follow any window's move/resize drag. Always
+    // WINEVENT_OUTOFCONTEXT: callbacks arrive through the hooking thread's message loop (the
+    // WinForms UI thread), with no DLL injected into the other process.
+    public const uint EVENT_SYSTEM_MOVESIZESTART = 0x000A;
+    public const uint EVENT_SYSTEM_MOVESIZEEND = 0x000B;
+    public const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
+    public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+    public const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
+    public const int OBJID_WINDOW = 0;
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventProc pfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool UnhookWinEvent(IntPtr hWinEventHook);
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

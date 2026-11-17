@@ -10,6 +10,7 @@ using DesktopTool.Features.Readme.UI;
 using DesktopTool.Features.Wallpapers;
 using DesktopTool.Features.Wallpapers.UI;
 using DesktopTool.Features.WidgetManager;
+using DesktopTool.Features.WindowSnapping;
 using DesktopTool.Features.WidgetManager.UI;
 using DesktopTool.UI;
 
@@ -24,6 +25,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     // FolderFenceManager's own constructor doc comment.
     private readonly FolderFenceManager _folderFenceManager;
     private readonly LayoutManager _layoutManager = new();
+    // Edge snapping and linked resize for every app window - see WindowSnappingService.
+    private readonly WindowSnappingService _windowSnapping = new();
 
     private readonly LayoutLauncherStore _layoutLauncherStore = new();
     private readonly WidgetManagerStore _widgetManagerStore = new();
@@ -106,7 +109,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // Needs _layoutLauncher/_wallpapers/_junkDrawer/_fenceLocker to already exist - their own rows
         // read/toggle those widgets' Visible directly rather than through a separate manager class.
         var widgetManagerModel = _widgetManagerStore.Load();
-        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _wallpapers, _junkDrawer, _fenceLocker, _folderFenceManager, widgetManagerModel, _widgetManagerStore);
+        _widgetManager = new WidgetManagerWidget(_fenceManager, _layoutLauncher, _wallpapers, _junkDrawer, _fenceLocker, _folderFenceManager, _windowSnapping, widgetManagerModel, _widgetManagerStore);
         _widgetManager.EditLayoutsRequested += (_, _) => OpenLayoutEditor(null);
         _widgetManager.HelpRequested += (_, _) => OpenReadme(null);
         // Every other widget's own Help button - opens the Readme on that widget's entry.
@@ -276,6 +279,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _widgetManager.Shutdown();
         _fenceManager.Dispose();
         _folderFenceManager.Dispose();
+        _windowSnapping.Dispose();
         ExitThread();
     }
 }

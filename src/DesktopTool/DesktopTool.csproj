@@ -11,4 +11,8 @@
     <RootNamespace>DesktopTool</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="DesktopTool.Tests" />
+  </ItemGroup>
+
 </Project>

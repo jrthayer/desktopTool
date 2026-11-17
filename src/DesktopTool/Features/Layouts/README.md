@@ -123,6 +123,13 @@ Each window is placed by its *visible* frame (DWM's extended frame bounds), not 
 `GetWindowRect`. That rect includes Windows 10/11's invisible ~7px resize borders, so placing by it
 would leave a visible gap between side-by-side windows. Capturing uses the visible frame too, so a
 saved layout replays at exactly the same size.
+
+## Linked edges
+
+Windows a layout places flush against each other resize together and snap back together like any
+other windows, through [Window Snapping](../WindowSnapping/README.md). Layouts don't link windows
+themselves any more.
+
 ## Layout Launcher widget
 
 The **Layout Launcher** (tray menu > Widgets > Layout Launcher) is a persistent, draggable/

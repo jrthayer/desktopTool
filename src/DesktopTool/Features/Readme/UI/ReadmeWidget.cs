@@ -148,6 +148,7 @@ internal sealed class ReadmeWidget : LayeredWidgetForm
         ["Wallpapers"] = GitHubFeaturesUrl + "Wallpapers/README.md",
         ["Junk Drawer"] = GitHubFeaturesUrl + "JunkDrawer/README.md",
         ["Fence Locker"] = GitHubFeaturesUrl + "FenceLocker/README.md",
+        ["Window Snapping"] = GitHubFeaturesUrl + "WindowSnapping/README.md",
     };
 
     private const int GitHubButtonWidth = 120;
