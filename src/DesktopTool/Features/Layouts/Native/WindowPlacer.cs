@@ -31,6 +31,22 @@ internal static class WindowPlacer
         "Windows.UI.Core.CoreWindow",
     };
 
+    // Processes whose windows are never worth capturing because launching the exe itself does
+    // nothing useful. ApplicationFrameHost is the frame Windows wraps around UWP/Store apps
+    // (Settings, Calculator, ...); the real app lives in a different process, and running
+    // ApplicationFrameHost.exe directly opens nothing.
+    private static readonly HashSet<string> ExcludedCaptureExeNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ApplicationFrameHost.exe",
+    };
+
+    /// <summary>Whether DWM is hiding the window even though IsWindowVisible says it's visible - a
+    /// suspended UWP frame, or a window on another virtual desktop. Neither is something the user
+    /// can see, so it's skipped both when capturing and when matching a launched window.</summary>
+    internal static bool IsCloaked(IntPtr hWnd) =>
+        NativeMethods.DwmGetWindowAttribute(hWnd, NativeMethods.DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0
+        && cloaked != 0;
+
     // Recognized so LayoutEntry.Url has something to act on - every one of these accepts
     // --new-window alongside a URL to force a genuinely new top-level window even when an
     // instance is already running, rather than reusing one as a new tab - see RunAsync's
@@ -78,6 +94,19 @@ internal static class WindowPlacer
     };
 
     private static bool IsTerminalExecutable(string exeName) => TerminalExeNames.Contains(exeName);
+
+    // File Explorer - recognized so LayoutEntry.FolderPath has something to act on, and so its
+    // window matching only ever considers real folder windows (see SnapshotWindows) rather than
+    // the taskbars and other shell windows explorer.exe also owns.
+    private const string ExplorerExeName = "explorer.exe";
+
+    private static bool IsExplorerExecutable(string exeName) =>
+        string.Equals(exeName, ExplorerExeName, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether programPath resolves to explorer.exe - used by LayoutEditorForm to decide
+    /// whether to show the Folder field, via the same .lnk-aware resolution IsBrowserProgram uses.</summary>
+    public static bool IsExplorerProgram(string programPath) =>
+        !string.IsNullOrWhiteSpace(programPath) && IsExplorerExecutable(ResolveExeName(programPath));
 
     /// <summary>Whether programPath resolves to a recognized terminal exe - used by LayoutEditorForm
     /// to decide whether to show the Commands field, via the same .lnk-aware resolution
@@ -239,11 +268,15 @@ internal static class WindowPlacer
             // of the separate window this entry needs to place. A terminal always launches its own
             // new process/window regardless (unlike a browser, it's never single-instance), so it
             // needs no equivalent flag.
+            // Explorer always opens a new folder window per launch (the new explorer.exe process
+            // just hands the request to the running shell and exits), so the folder is all it needs.
             var arguments = isBrowser
                 ? (hasUrl ? BuildNewWindowArgs(entry.Url!) : "--new-window")
                 : isTerminal && hasCommand
                     ? BuildTerminalCommandArgs(exeName, entry)
-                    : entry.Arguments ?? string.Empty;
+                    : IsExplorerExecutable(exeName)
+                        ? ExplorerWindows.BuildLaunchArgs(entry.FolderPath)
+                        : entry.Arguments ?? string.Empty;
 
             // Windows Terminal honours its own "windowingBehavior" setting, which can route a
             // launch into an already-open window as a new tab - no new window would appear to poll
@@ -403,13 +436,16 @@ internal static class WindowPlacer
     /// one specific window the user clicked on, with the exact same rules for what's usable and where
     /// it currently sits. Returns null for anything CaptureCurrentLayout would have skipped: not a
     /// real visible top-level window, known shell chrome (see ExcludedCaptureClassNames), this app's
-    /// own windows, or anything whose owning exe can't be resolved (including Explorer - see the
-    /// explorer.exe check below).</summary>
+    /// own windows, cloaked windows (see IsCloaked), hosts that can't be relaunched (see
+    /// ExcludedCaptureExeNames), anything whose owning exe can't be resolved, or any explorer.exe window that
+    /// isn't a File Explorer folder window (see the explorer.exe check below). A folder window is
+    /// captured along with the folder it's showing (LayoutEntry.FolderPath).</summary>
     internal static LayoutEntry? CaptureWindow(IntPtr hWnd)
     {
         if (hWnd == IntPtr.Zero
             || !NativeMethods.IsWindowVisible(hWnd)
             || NativeMethods.GetWindow(hWnd, NativeMethods.GW_OWNER) != IntPtr.Zero
+            || IsCloaked(hWnd)
             || ExcludedCaptureClassNames.Contains(GetClassName(hWnd)))
         {
             return null;
@@ -429,16 +465,16 @@ internal static class WindowPlacer
         }
 
         var exePath = GetOwningExePath(hWnd);
-        if (string.IsNullOrEmpty(exePath)
-            || string.Equals(Path.GetFileName(exePath), "explorer.exe", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrEmpty(exePath) || ExcludedCaptureExeNames.Contains(Path.GetFileName(exePath)))
+            return null;
+
+        var isExplorer = IsExplorerExecutable(Path.GetFileName(exePath));
+        if (isExplorer && !IsExplorerFolderWindow(hWnd))
         {
-            // No resolvable owner, or anything owned by Explorer - not just the File Explorer
-            // window most people picture, but also every stray taskbar/shell-chrome window that
-            // isn't caught by ExcludedCaptureClassNames' exact class-name list above (confirmed
-            // via testing: secondary-monitor taskbars showed up under a class name not in that
-            // list). A real Explorer folder window gets excluded too, but "explorer.exe" alone
-            // can't relaunch a specific folder back open anyway - capturing one would just be a
-            // broken replay dressed up as a working one.
+            // Everything else explorer.exe owns - the desktop, every taskbar, and stray shell-chrome
+            // windows ExcludedCaptureClassNames' exact list doesn't catch (confirmed via testing:
+            // secondary-monitor taskbars showed up under a class name not in that list). Only a
+            // real File Explorer folder window is worth capturing, and it's recognizable by class.
             return null;
         }
 
@@ -449,6 +485,7 @@ internal static class WindowPlacer
             ProgramPath = exePath,
             TargetMonitor = screen.DeviceName,
             WindowTitleHint = string.IsNullOrEmpty(title) ? null : title,
+            FolderPath = isExplorer ? ExplorerWindows.TryGetFolderPath(hWnd) : null,
         };
 
         if (isMaximized)
@@ -500,7 +537,10 @@ internal static class WindowPlacer
             return true;
         }
 
-        if (!NativeMethods.GetWindowRect(hWnd, out var winRect) || winRect.Right <= winRect.Left || winRect.Bottom <= winRect.Top)
+        // The visible frame, not GetWindowRect - PlaceWindow lines the visible frame up with the
+        // resolved rect, so capturing the outer rect instead would grow every window by its
+        // invisible borders on each save/replay round trip.
+        if (!TryGetVisibleFrame(hWnd, out var winRect) || winRect.Right <= winRect.Left || winRect.Bottom <= winRect.Top)
         {
             bounds = Rectangle.Empty;
             isMaximized = false;
@@ -530,13 +570,22 @@ internal static class WindowPlacer
         return Path.GetFileName(programPath);
     }
 
+    private static bool IsExplorerFolderWindow(IntPtr hWnd) =>
+        string.Equals(GetClassName(hWnd), ExplorerWindows.FolderWindowClass, StringComparison.Ordinal);
+
+    /// <summary>Every visible, unowned top-level window owned by exeName. For explorer.exe only
+    /// folder windows count - otherwise a taskbar or other shell window appearing mid-run could be
+    /// the "new window" an Explorer entry claims and moves.</summary>
     private static HashSet<IntPtr> SnapshotWindows(string exeName)
     {
         var matches = new HashSet<IntPtr>();
+        var explorerOnly = IsExplorerExecutable(exeName);
         NativeMethods.EnumWindows((hWnd, _) =>
         {
             if (NativeMethods.IsWindowVisible(hWnd)
                 && NativeMethods.GetWindow(hWnd, NativeMethods.GW_OWNER) == IntPtr.Zero
+                && (!explorerOnly || IsExplorerFolderWindow(hWnd))
+                && !IsCloaked(hWnd)
                 && string.Equals(GetOwningExeName(hWnd), exeName, StringComparison.OrdinalIgnoreCase))
             {
                 matches.Add(hWnd);
@@ -615,6 +664,22 @@ internal static class WindowPlacer
             var rect = ResolveRect(screen, entry);
             NativeMethods.SetWindowPos(hWnd, IntPtr.Zero, rect.X, rect.Y, rect.Width, rect.Height,
                 NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+
+            // rect is where the *visible* frame should land. Win10/11 windows carry invisible
+            // resize borders outside it (part of GetWindowRect/SetWindowPos's rect), so without
+            // this two side-by-side windows show a ~14px gap instead of touching like snapped
+            // windows do. The insets can only be read once the window is on its target monitor
+            // (they scale with its DPI), hence the second SetWindowPos.
+            if (TryGetFrameInsets(hWnd, out var insets)
+                && (insets.Left != 0 || insets.Top != 0 || insets.Right != 0 || insets.Bottom != 0))
+            {
+                NativeMethods.SetWindowPos(hWnd, IntPtr.Zero,
+                    rect.X - insets.Left,
+                    rect.Y - insets.Top,
+                    rect.Width + insets.Left + insets.Right,
+                    rect.Height + insets.Top + insets.Bottom,
+                    NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+            }
         }
 
         // Minimized last, on top of whatever placement just ran above - not an alternative to it
@@ -622,6 +687,41 @@ internal static class WindowPlacer
         // rather than whatever size the window happened to launch at.
         if (entry.Minimized)
             NativeMethods.ShowWindow(hWnd, NativeMethods.SW_MINIMIZE);
+    }
+
+    /// <summary>The window's visible frame (DWM's extended frame bounds), falling back to
+    /// GetWindowRect when DWM can't report one.</summary>
+    internal static bool TryGetVisibleFrame(IntPtr hWnd, out RECT frame)
+    {
+        if (NativeMethods.DwmGetWindowAttribute(hWnd, NativeMethods.DWMWA_EXTENDED_FRAME_BOUNDS, out frame, Marshal.SizeOf<RECT>()) == 0
+            && frame.Right > frame.Left && frame.Bottom > frame.Top)
+        {
+            return true;
+        }
+
+        return NativeMethods.GetWindowRect(hWnd, out frame);
+    }
+
+    /// <summary>How far GetWindowRect extends past the visible frame on each side - the invisible
+    /// resize borders. Each field is non-negative in the direction it extends (Left = how far the
+    /// outer rect's left edge sits left of the frame, and so on).</summary>
+    internal static bool TryGetFrameInsets(IntPtr hWnd, out RECT insets)
+    {
+        insets = default;
+        if (!NativeMethods.GetWindowRect(hWnd, out var outer)
+            || NativeMethods.DwmGetWindowAttribute(hWnd, NativeMethods.DWMWA_EXTENDED_FRAME_BOUNDS, out RECT frame, Marshal.SizeOf<RECT>()) != 0)
+        {
+            return false;
+        }
+
+        insets = new RECT
+        {
+            Left = Math.Max(0, frame.Left - outer.Left),
+            Top = Math.Max(0, frame.Top - outer.Top),
+            Right = Math.Max(0, outer.Right - frame.Right),
+            Bottom = Math.Max(0, outer.Bottom - frame.Bottom),
+        };
+        return true;
     }
 
     private static Screen ResolveScreen(string deviceName)

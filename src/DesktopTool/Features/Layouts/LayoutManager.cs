@@ -120,6 +120,7 @@ public sealed class LayoutManager
         Url = entry.Url,
         Command = entry.Command,
         TerminalShellExe = entry.TerminalShellExe,
+        FolderPath = entry.FolderPath,
         TargetMonitor = entry.TargetMonitor,
         Placement = entry.Placement,
         Minimized = entry.Minimized,

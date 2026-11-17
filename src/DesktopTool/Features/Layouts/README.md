@@ -38,6 +38,12 @@ Each `LayoutEntry` records:
   (PowerShell/PowerShell 7/Command Prompt) says which shell those commands should run in, since
   Windows Terminal isn't itself a shell and there's no way to tell from a captured window alone
   which one it was actually running.
+- **Folder to open** (File Explorer entries only) — the folder the window reopens at, captured from
+  the live window through `Shell.Application` ([`ExplorerWindows`](Native/ExplorerWindows.cs)) or
+  picked with the editor's **...** button. Virtual folders (This PC, Home) are stored as their
+  `::{GUID}` form and launched as `shell:::{GUID}`. Empty opens Explorer's default view. On run,
+  only real folder windows (class `CabinetWClass`) count as candidates, so a taskbar or other shell
+  window is never the one that gets placed.
 - **Store/MSIX apps** (anything captured from `Program Files\WindowsApps\...`, Windows Terminal
   included) never launch from that captured path. The folder is version-stamped and disappears on
   every app update. Instead, `PackagedAppLauncher` looks up the package's current install and
@@ -72,8 +78,10 @@ are actually edited ([`LayoutEditorForm`](UI/LayoutEditorForm.cs)):
 
 Building a profile entry-by-entry through the editor is one option; the other two capture
 whatever's actually open and where it's actually sitting right now
-(`WindowPlacer.CaptureCurrentLayout`/`CaptureWindow`), skipping this app's own windows, Explorer,
-and shell chrome (Start menu, Search, Action Center, Widgets flyouts) automatically:
+(`WindowPlacer.CaptureCurrentLayout`/`CaptureWindow`), skipping this app's own windows, the
+desktop and taskbars, shell chrome (Start menu, Search, Action Center, Widgets flyouts),
+`ApplicationFrameHost.exe` (the frame Windows hosts UWP/Store apps in, which can't be relaunched on
+its own), and cloaked windows that report as visible but aren't on screen, automatically. File Explorer folder windows *are* captured, along with the folder each is showing:
 
 - **Save Current Layout** (on the Layout Launcher widget) captures *every* visible top-level window
   at once into a brand-new profile, then opens the editor jumped straight to it.
@@ -93,6 +101,9 @@ seen so far. Harmless to leave in a saved layout (running it just tries to "rela
 itself, which is already running and a no-op in practice), but worth deleting by hand via Manage
 Layouts if you notice it.
 
+With Windows 11's tabbed File Explorer, a window with several tabs is captured as just one folder
+(the first tab `Shell.Application` lists for it), and replays as a single-tab window.
+
 ## Running a layout
 
 `WindowPlacer.RunAsync` launches every entry up front (not one at a time, then waits), then polls
@@ -108,6 +119,10 @@ surfaced through `LayoutManager.LaunchFailed` (a tray balloon notification) and
 `GetLaunchError` (the caution icon on that layout's row, in both the Layout Launcher widget and the
 editor's own Layouts list).
 
+Each window is placed by its *visible* frame (DWM's extended frame bounds), not its
+`GetWindowRect`. That rect includes Windows 10/11's invisible ~7px resize borders, so placing by it
+would leave a visible gap between side-by-side windows. Capturing uses the visible frame too, so a
+saved layout replays at exactly the same size.
 ## Layout Launcher widget
 
 The **Layout Launcher** (tray menu > Widgets > Layout Launcher) is a persistent, draggable/

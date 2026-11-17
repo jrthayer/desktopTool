@@ -400,6 +400,21 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool IsWindowVisible(IntPtr hWnd);
 
+    // Non-zero when DWM is hiding ("cloaking") a window that IsWindowVisible still reports as
+    // visible - suspended UWP app frames, windows on another virtual desktop.
+    public const int DWMWA_CLOAKED = 14;
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+
+    // The window's visible frame, without the invisible resize borders Win10/11 add around it -
+    // GetWindowRect includes those (~7px each side), so two windows placed edge-to-edge by their
+    // GetWindowRect show a visible gap. See WindowPlacer.TryGetFrameInsets.
+    public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
+
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);

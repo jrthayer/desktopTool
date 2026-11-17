@@ -36,6 +36,9 @@ internal sealed class LayoutEditorForm : Form
     private readonly Button _addTabButton;
     private readonly Label _terminalShellLabel;
     private readonly ComboButton _terminalShellCombo;
+    private readonly Label _folderLabel;
+    private readonly TextBox _folderPathBox;
+    private readonly Button _browseFolderButton;
     private readonly CheckBox _minimizedCheck;
     private readonly Button _runButton;
 
@@ -249,6 +252,26 @@ internal sealed class LayoutEditorForm : Form
         _terminalShellCombo.SetItems(TerminalShellOptions.Select(o => o.Display).ToList(), 0);
         _terminalShellCombo.SelectedIndexChanged += _ => CommitTerminalShell();
 
+        // Only shown for a File Explorer entry (see WindowPlacer.IsExplorerProgram), in the same slot
+        // the URL/Commands groups use - an entry is never more than one of the three. Typed paths
+        // (including a captured "::{GUID}" virtual folder) commit on Enter or leaving the box; the
+        // "..." button picks a real folder and commits straight away.
+        _folderLabel = new Label { Text = "Folder to open (File Explorer only)", Location = new Point(222, 320), AutoSize = true, Visible = false };
+        _folderPathBox = CreateTextBox(new Rectangle(222, 340, 290, 24));
+        _folderPathBox.Visible = false;
+        _folderPathBox.Leave += (_, _) => CommitFolderPath(_folderPathBox.Text);
+        _folderPathBox.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode != Keys.Enter)
+                return;
+            CommitFolderPath(_folderPathBox.Text);
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+        };
+
+        _browseFolderButton = new DarkButton { Text = "...", Location = new Point(518, 340), Width = 26, Height = 24, Visible = false };
+        _browseFolderButton.Click += (_, _) => BrowseForFolder();
+
         // Independent of Placement, not shown/hidden with the URL/Command controls the way those are - see
         // LayoutEntry.Minimized for why this stacks on top of whatever Placement already resolved
         // to rather than replacing it.
@@ -267,7 +290,7 @@ internal sealed class LayoutEditorForm : Form
         foreach (var button in new[]
         {
             newProfileButton, _deleteProfileButton, selectWindowButton, _removeEntryButton, browseButton,
-            _addUrlButton, _addCommandButton, _addTabButton, _runButton, closeButton,
+            _addUrlButton, _addCommandButton, _addTabButton, _browseFolderButton, _runButton, closeButton,
         })
             StyleButton(button);
 
@@ -279,6 +302,7 @@ internal sealed class LayoutEditorForm : Form
             _urlLabel, _urlList, _urlInputBox, _addUrlButton,
             _commandLabel, _commandList, _commandInputBox, _addCommandButton, _addTabButton,
             _terminalShellLabel, _terminalShellCombo,
+            _folderLabel, _folderPathBox, _browseFolderButton,
             _minimizedCheck, _runButton, closeButton,
         });
 
@@ -675,6 +699,7 @@ internal sealed class LayoutEditorForm : Form
         _monitorCombo.SetItems(monitorItems, Math.Max(monitorIndex, 0));
         _placementCombo.SetItems(Enum.GetValues<LayoutPlacement>().Select(DescribePlacement).ToList(), (int)entry.Placement);
         _minimizedCheck.Checked = entry.Minimized;
+        _folderPathBox.Text = entry.FolderPath ?? string.Empty;
         _isPopulating = false;
 
         RefreshUrlList(entry);
@@ -695,6 +720,8 @@ internal sealed class LayoutEditorForm : Form
         _addCommandButton.Enabled = enabled;
         _addTabButton.Enabled = enabled;
         _terminalShellCombo.Enabled = enabled;
+        _folderPathBox.Enabled = enabled;
+        _browseFolderButton.Enabled = enabled;
         _minimizedCheck.Enabled = enabled;
         if (!enabled)
         {
@@ -709,6 +736,9 @@ internal sealed class LayoutEditorForm : Form
             _addTabButton.Visible = false;
             _terminalShellLabel.Visible = false;
             _terminalShellCombo.Visible = false;
+            _folderLabel.Visible = false;
+            _folderPathBox.Visible = false;
+            _browseFolderButton.Visible = false;
         }
     }
 
@@ -731,6 +761,11 @@ internal sealed class LayoutEditorForm : Form
         _commandInputBox.Visible = isTerminal;
         _addCommandButton.Visible = isTerminal;
         _addTabButton.Visible = isTerminal;
+
+        var isExplorer = WindowPlacer.IsExplorerProgram(entry.ProgramPath);
+        _folderLabel.Visible = isExplorer;
+        _folderPathBox.Visible = isExplorer;
+        _browseFolderButton.Visible = isExplorer;
 
         var isWindowsTerminal = isTerminal && WindowPlacer.IsWindowsTerminalProgram(entry.ProgramPath);
         _terminalShellLabel.Visible = isWindowsTerminal;
@@ -853,6 +888,42 @@ internal sealed class LayoutEditorForm : Form
         _selectedEntry.ProgramPath = dialog.FileName;
         _programPathBox.Text = dialog.FileName;
         RefreshTypeSpecificFieldVisibility(_selectedEntry);
+        CommitEntryFields();
+    }
+
+    private void BrowseForFolder()
+    {
+        if (_selectedEntry is null)
+            return;
+
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "Choose the folder File Explorer should open",
+            UseDescriptionForTitle = true,
+        };
+        if (Directory.Exists(_selectedEntry.FolderPath))
+            dialog.InitialDirectory = _selectedEntry.FolderPath;
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        _folderPathBox.Text = dialog.SelectedPath;
+        CommitFolderPath(dialog.SelectedPath);
+    }
+
+    /// <summary>Writes a folder (typed or browsed) into _selectedEntry.FolderPath and persists via
+    /// CommitEntryFields, which also refreshes the entry's Programs-list row, since DescribeEntry
+    /// names an Explorer entry by its folder. A no-op when nothing changed, so leaving the box
+    /// without editing it doesn't trigger a save.</summary>
+    private void CommitFolderPath(string text)
+    {
+        if (_isPopulating || _selectedEntry is not { } entry)
+            return;
+
+        var folder = string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+        if (string.Equals(folder, entry.FolderPath, StringComparison.Ordinal))
+            return;
+
+        entry.FolderPath = folder;
         CommitEntryFields();
     }
 
@@ -1016,12 +1087,32 @@ internal sealed class LayoutEditorForm : Form
 
     private string DescribeEntry(LayoutEntry entry)
     {
-        var program = string.IsNullOrEmpty(entry.ProgramPath) ? "(no program set)" : Path.GetFileName(entry.ProgramPath);
+        var program = string.IsNullOrEmpty(entry.ProgramPath) ? "(no program set)"
+            : WindowPlacer.IsExplorerProgram(entry.ProgramPath) ? DescribeExplorerEntry(entry)
+            : Path.GetFileName(entry.ProgramPath);
         var monitorIndex = _screens.FindIndex(s => s.DeviceName == entry.TargetMonitor);
         var monitor = monitorIndex >= 0 ? $"Screen {monitorIndex + 1}"
             : IsMonitorMissing(entry) ? MonitorNotConnectedLabel : "Screen 1";
         var minimizedSuffix = entry.Minimized ? " (minimized)" : string.Empty;
         return $"{program} — {monitor} — {DescribePlacement(entry.Placement)}{minimizedSuffix}";
+    }
+
+    /// <summary>"File Explorer (Downloads)" - several Explorer entries would otherwise all read as
+    /// a bare "explorer.exe". A virtual folder's "::{GUID}" path means nothing to a person, so the
+    /// captured window title (e.g. "This PC") is used for those instead.</summary>
+    private static string DescribeExplorerEntry(LayoutEntry entry)
+    {
+        var folder = entry.FolderPath?.Trim();
+        if (string.IsNullOrEmpty(folder))
+            return "File Explorer";
+
+        var name = folder.StartsWith("::", StringComparison.Ordinal)
+            ? entry.WindowTitleHint
+            : Path.GetFileName(folder.TrimEnd('\\', '/'));
+        if (string.IsNullOrEmpty(name))
+            name = folder;
+
+        return $"File Explorer ({name})";
     }
 
     private static string DescribeScreen(Screen screen)

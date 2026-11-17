@@ -75,6 +75,13 @@ public sealed class LayoutEntry
     /// entry, where the shell is already implied by ProgramPath itself.</summary>
     public string? TerminalShellExe { get; set; }
 
+    /// <summary>File Explorer-only (see WindowPlacer.IsExplorerProgram): the folder this entry's
+    /// window opens at - captured from the live window via ExplorerWindows.TryGetFolderPath, or
+    /// picked by hand in LayoutEditorForm. Passed straight to explorer.exe as its argument, so a
+    /// virtual-folder "::{GUID}" path (This PC, say) works the same as a real directory. Null/empty
+    /// opens Explorer's default view.</summary>
+    public string? FolderPath { get; set; }
+
     /// <summary>Screen.DeviceName, not an index into Screen.AllScreens or its Bounds (unlike
     /// SnapLineModel.MonitorBounds) - a plugged-in monitor's device name is more likely to survive
     /// a resolution change or the monitors being reordered in Windows' own display settings than
