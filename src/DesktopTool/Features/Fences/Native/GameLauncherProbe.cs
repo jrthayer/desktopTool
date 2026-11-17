@@ -65,7 +65,9 @@ internal static class GameLauncherProbe
         return true;
     }
 
-    private static string? SteamInstallPath()
+    /// <summary>Steam's install root from the registry, or null if Steam isn't installed. Also used by
+    /// HelperHostedApps to find steam.exe for a layout entry captured from a Steam window.</summary>
+    internal static string? SteamInstallPath()
     {
         static string? FromKey(RegistryKey root, string subKey, string valueName)
         {

@@ -22,6 +22,11 @@ internal static class WindowPlacer
     private const int PollIntervalMs = 200;
     private const int LaunchTimeoutMs = 15000;
 
+    // How long a single-instance launcher (see HelperHostedApps) gets to produce a brand-new window
+    // before its already-open window is taken instead - relaunching Steam while it's open just
+    // brings the existing window forward, so no new one would ever appear.
+    private const int SingleInstanceGraceMs = 3000;
+
     // Shell chrome that isn't owned by explorer.exe (so the blanket explorer.exe skip in
     // CaptureCurrentLayout doesn't already catch it) but would otherwise pass its visible/unowned/
     // non-iconic filter same as any real app window - the Start menu/Search/Action Center/Widgets
@@ -230,8 +235,18 @@ internal static class WindowPlacer
     public static async Task<IReadOnlyList<string>> RunAsync(IReadOnlyList<LayoutEntry> entries)
     {
         var claimed = new HashSet<IntPtr>();
-        var pending = new List<(LayoutEntry Entry, string ExeName, HashSet<IntPtr> Before)>();
+        var pending = new List<PendingLaunch>();
         var failures = new List<string>();
+
+        // Each entry waits its own launcher's timeout (15s unless HelperHostedApps says longer, e.g.
+        // Steam's cold start), all capped by one run-wide deadline sized to the slowest of them - so a
+        // layout without Steam in it behaves exactly as it did with the single shared 15s deadline.
+        var runStart = Environment.TickCount64;
+        var runDeadline = runStart + entries
+            .Where(e => !string.IsNullOrWhiteSpace(e.ProgramPath))
+            .Select(e => HelperHostedApps.TimeoutFor(ResolveExeName(HelperHostedApps.ToLauncherPath(e.ProgramPath))) ?? LaunchTimeoutMs)
+            .DefaultIfEmpty(LaunchTimeoutMs)
+            .Max();
 
         // Two entries for the same exe can't be launched together: both would be polling for a
         // new window (see "pending" below), and a freshly-added entry has no reliable
@@ -259,7 +274,13 @@ internal static class WindowPlacer
             var isTerminal = IsTerminalExecutable(exeName);
             var hasUrl = !string.IsNullOrWhiteSpace(entry.Url);
             var hasCommand = !string.IsNullOrWhiteSpace(entry.Command);
-            var before = SnapshotWindows(exeName);
+
+            // An entry saved before capture knew about helper-hosted apps still names the helper
+            // (steamwebhelper.exe) - launch the real launcher instead, and match windows by the
+            // helper, which is what actually owns them.
+            var programPath = HelperHostedApps.ToLauncherPath(entry.ProgramPath);
+            var matchExe = HelperHostedApps.WindowExeFor(exeName);
+            var before = SnapshotWindows(matchExe);
 
             // A browser always gets --new-window here, with its URL if it has one and bare
             // otherwise, so a genuinely new, pollable top-level window appears - without it,
@@ -290,12 +311,12 @@ internal static class WindowPlacer
                 // package identity rather than their version-stamped WindowsApps path, which
                 // disappears on every app update - see PackagedAppLauncher. Null means "not a
                 // packaged app", so it's launched normally.
-                switch (PackagedAppLauncher.TryLaunch(entry.ProgramPath, arguments))
+                switch (PackagedAppLauncher.TryLaunch(programPath, arguments))
                 {
                     case false:
                         throw new Win32Exception();
                     case null:
-                        Process.Start(new ProcessStartInfo(entry.ProgramPath)
+                        Process.Start(new ProcessStartInfo(programPath)
                         {
                             Arguments = arguments,
                             UseShellExecute = true,
@@ -309,12 +330,14 @@ internal static class WindowPlacer
                 // off - nothing to place if it never launched. Recorded now (rather than silently
                 // dropped) so the caller can actually surface it instead of a program just quietly
                 // never showing up.
-                failures.Add(Path.GetFileName(entry.ProgramPath));
+                failures.Add(Path.GetFileName(programPath));
                 LaunchNext(exeName);
                 return;
             }
 
-            pending.Add((entry, exeName, before));
+            var launchedAt = Environment.TickCount64;
+            var deadline = Math.Min(runDeadline, launchedAt + (HelperHostedApps.TimeoutFor(exeName) ?? LaunchTimeoutMs));
+            pending.Add(new PendingLaunch(entry, exeName, matchExe, programPath, before, launchedAt, deadline));
         }
 
         foreach (var entry in entries)
@@ -322,7 +345,7 @@ internal static class WindowPlacer
             if (string.IsNullOrWhiteSpace(entry.ProgramPath))
                 continue;
 
-            var exeName = ResolveExeName(entry.ProgramPath);
+            var exeName = ResolveExeName(HelperHostedApps.ToLauncherPath(entry.ProgramPath));
 
             if (!launchingExes.Add(exeName))
             {
@@ -335,31 +358,49 @@ internal static class WindowPlacer
             Launch(entry, exeName);
         }
 
-        var deadline = Environment.TickCount64 + LaunchTimeoutMs;
-        while (Environment.TickCount64 < deadline
+        while (Environment.TickCount64 < runDeadline
             && (pending.Count > 0 || queuedEntries.Values.Any(q => q.Count > 0)))
         {
             await Task.Delay(PollIntervalMs);
+            var now = Environment.TickCount64;
 
             for (var i = pending.Count - 1; i >= 0; i--)
             {
-                var (entry, exeName, before) = pending[i];
-                var after = SnapshotWindows(exeName);
-                after.ExceptWith(before);
-                if (after.Count == 0)
-                    continue;
+                var p = pending[i];
+                var current = SnapshotWindows(p.MatchExe);
+                var after = new HashSet<IntPtr>(current);
+                after.ExceptWith(p.Before);
 
-                var claim = ClaimWindow(after, entry.WindowTitleHint, claimed);
+                // A single-instance launcher that was already open just brought its existing window
+                // forward - once the grace period passes without a new one, take that window.
+                if (after.Count == 0
+                    && HelperHostedApps.IsSingleInstance(p.ExeName)
+                    && now - p.LaunchedAt >= SingleInstanceGraceMs)
+                {
+                    after = current;
+                }
+
+                var claim = after.Count == 0 ? IntPtr.Zero : ClaimWindow(after, p.Entry.WindowTitleHint, claimed);
                 if (claim == IntPtr.Zero)
-                    continue;
+                {
+                    if (now < p.Deadline)
+                        continue;
 
-                PlaceWindow(claim, entry);
+                    // Out of time for this entry (launched fine, but nothing matching showed up) -
+                    // fail it now rather than at the run-wide deadline, and free its exe's queue.
+                    failures.Add(Path.GetFileName(p.ProgramPath));
+                    pending.RemoveAt(i);
+                    LaunchNext(p.ExeName);
+                    continue;
+                }
+
+                PlaceWindow(claim, p.Entry);
                 pending.RemoveAt(i);
 
                 // This exe's window is spoken for now, so it's safe to let the next queued entry
                 // for the same exe launch - its own "before" snapshot will include the window just
                 // claimed above, keeping the two from ever racing each other.
-                LaunchNext(exeName);
+                LaunchNext(p.ExeName);
             }
         }
 
@@ -367,11 +408,21 @@ internal static class WindowPlacer
         // but nothing matching ever showed up); whatever's still queued never even got launched at
         // all (its predecessor for the same exe was still pending when time ran out) - both read as
         // "didn't launch" from the caller's own perspective, same as an outright Win32Exception.
-        failures.AddRange(pending.Select(p => Path.GetFileName(p.Entry.ProgramPath)));
-        failures.AddRange(queuedEntries.Values.SelectMany(q => q).Select(entry => Path.GetFileName(entry.ProgramPath)));
+        failures.AddRange(pending.Select(p => Path.GetFileName(p.ProgramPath)));
+        failures.AddRange(queuedEntries.Values.SelectMany(q => q)
+            .Select(entry => Path.GetFileName(HelperHostedApps.ToLauncherPath(entry.ProgramPath))));
 
         return failures;
     }
+
+    private sealed record PendingLaunch(
+        LayoutEntry Entry,
+        string ExeName,
+        string MatchExe,
+        string ProgramPath,
+        HashSet<IntPtr> Before,
+        long LaunchedAt,
+        long Deadline);
 
     /// <summary>Picks one still-unclaimed window out of candidates for a single entry, and marks it
     /// claimed so no later entry in the same RunAsync call can also take it. Prefers an exact title
@@ -482,7 +533,9 @@ internal static class WindowPlacer
         var title = GetWindowTitle(hWnd);
         var entry = new LayoutEntry
         {
-            ProgramPath = exePath,
+            // A helper-hosted window (Steam's steamwebhelper.exe) is stored as its launcher, since
+            // starting the helper itself opens nothing - see HelperHostedApps.
+            ProgramPath = HelperHostedApps.ToLauncherPath(exePath),
             TargetMonitor = screen.DeviceName,
             WindowTitleHint = string.IsNullOrEmpty(title) ? null : title,
             FolderPath = isExplorer ? ExplorerWindows.TryGetFolderPath(hWnd) : null,

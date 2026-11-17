@@ -51,6 +51,12 @@ Each `LayoutEntry` records:
   AUMID activation, so these entries survive updates.
 - **Windows Terminal** launches additionally get `-w new`, so Terminal never tabs into an
   already-open window instead of opening the new window the layout needs to place.
+- **Steam** draws every window in its `steamwebhelper.exe` helper, which opens nothing when started
+  directly. [`HelperHostedApps`](Native/HelperHostedApps.cs) maps that helper back to `steam.exe`:
+  capture stores `steam.exe`, older entries that saved the helper are launched as `steam.exe`, and
+  the launched window is matched by the helper's exe name. Steam gets 60s to appear (a cold start
+  checks for updates first). It only runs one instance, so if no new Steam window appears within 3s
+  (Steam was already open), its existing window is placed instead.
 
 **Limitations:** two entries for the same program still both become separate `LayoutEntry`
 objects, but `WindowPlacer`'s claim-tracking keeps them from fighting over the same window on
